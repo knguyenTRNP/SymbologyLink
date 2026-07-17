@@ -1,0 +1,20 @@
+{
+  "records": [
+    {
+      "source_id": "json-1",
+      "merchant_name": "Microsoft Corp",
+      "website": "microsoft.com",
+      "symbol": "MSFT",
+      "exchange": "NASDAQ",
+      "event_dt": "2025-01-01",
+      "country_code": "US"
+    },
+    {
+      "source_id": "json-2",
+      "merchant_name": "GitHub",
+      "website": "github.com",
+      "event_dt": "2025-01-01",
+      "country_code": "US"
+    }
+  ]
+}
