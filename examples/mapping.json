@@ -1,0 +1,12 @@
+{
+  "mapping": {
+    "source_id": "recordId",
+    "merchant_name": "entityName",
+    "website": "domain",
+    "symbol": "ticker",
+    "exchange": "exchange",
+    "event_dt": "observationDate",
+    "country_code": "country",
+    "amount": "metadata"
+  }
+}

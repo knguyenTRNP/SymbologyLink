@@ -1,0 +1,5 @@
+source_id,merchant_name,website,symbol,exchange,event_dt,country_code,amount
+1,Microsoft Corp,microsoft.com,MSFT,NASDAQ,2025-01-01,US,1000
+2,GitHub,github.com,,,2025-01-01,US,250
+3,Apple Bank,,,NASDAQ,2025-01-01,US,400
+4,Local Family Pharmacy,,,,2025-01-01,US,75

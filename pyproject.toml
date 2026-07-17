@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SymbologyLink"
+version = "0.0.0"
+description = "Auditable company and security resolution engine"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Symbology Link contributors"}]
+keywords = ["entity-resolution", "security-master", "symbology", "finance", "gleif", "openfigi", "sec"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Office/Business :: Financial",
+]
+
+[project.optional-dependencies]
+parquet = ["pyarrow>=16"]
+rules = ["PyYAML>=6"]
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.20"]
+all = ["pyarrow>=16", "PyYAML>=6", "fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart>=0.0.20"]
+test = ["httpx>=0.27"]
+
+[project.scripts]
+symbologylink = "symbologylink.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,61 @@
+{
+  "rules": [
+    {
+      "id": "github_to_microsoft",
+      "version": "2",
+      "priority": 100,
+      "enabled": true,
+      "description": "Approved operating-entity and parent mapping.",
+      "conditions": {
+        "entity_name": {
+          "normalized_exact_any": ["GitHub", "Git Hub"]
+        }
+      },
+      "valid_from": "2018-10-26",
+      "result": {
+        "entity": {
+          "entity_id": "entity:github",
+          "canonical_name": "GitHub Inc",
+          "entity_type": "subsidiary"
+        },
+        "public_parent": {
+          "entityId": "entity:microsoft",
+          "canonicalName": "Microsoft Corporation",
+          "entityType": "issuer",
+          "relationshipType": "subsidiary_of"
+        },
+        "relationships": [
+          {
+            "fromEntityId": "entity:github",
+            "toEntityId": "entity:microsoft",
+            "relationshipType": "subsidiary_of",
+            "validFrom": "2018-10-26",
+            "toEntity": {
+              "entityId": "entity:microsoft",
+              "canonicalName": "Microsoft Corporation",
+              "entityType": "issuer"
+            }
+          }
+        ],
+        "security": {
+          "internal_security_id": "security:msft",
+          "ticker": "MSFT",
+          "exchange": "NASDAQ"
+        },
+        "entity_periods": [
+          {
+            "periodType": "entity_existence",
+            "validFrom": "2008-02-08"
+          }
+        ],
+        "security_periods": [
+          {
+            "periodType": "security_listing",
+            "validFrom": "1986-03-13",
+            "securityId": "security:msft"
+          }
+        ]
+      }
+    }
+  ]
+}

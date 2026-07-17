@@ -1,0 +1,5 @@
+internal_entity_id,internal_security_id,canonical_name,entity_type,ticker,exchange,figi,cik,lei,domain,country,aliases,parent_entity_id,parent_name,relationship_type,valid_from,valid_to,entity_valid_from,entity_valid_to,entity_status,security_valid_from,security_valid_to,security_status,relationship_valid_from,relationship_valid_to,relationship_status
+entity:microsoft,security:msft,Microsoft Corporation,issuer,MSFT,NASDAQ,BBG000BPH459,0000789019,INR2EJN1ERAN0W5ZP974,microsoft.com,US,Microsoft Corp|Microsoft,,,,1986-03-13,,1975-04-04,,ACTIVE,1986-03-13,,ACTIVE,,,
+entity:github,,GitHub Inc,subsidiary,,,,,,github.com,US,GitHub|Git Hub,entity:microsoft,Microsoft Corporation,subsidiary_of,2018-10-26,,2008-02-08,,ACTIVE,,,,2018-10-26,,ACTIVE
+entity:apple-bank,,Apple Bank for Savings,legal_entity,,,,,,applebank.com,US,Apple Bank,,,,1863-01-01,,1863-01-01,,ACTIVE,,,,,,
+entity:amazon,security:amzn,Amazon.com Inc,issuer,AMZN,NASDAQ,BBG000BVPV84,0001018724,AMZNLEI0000000000000,amazon.com,US,Amazon|Amazon.com,,,,1997-05-15,,1994-07-05,,ACTIVE,1997-05-15,,ACTIVE,,,

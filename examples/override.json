@@ -1,0 +1,11 @@
+{
+  "pattern": {
+    "entity_name": {
+      "normalized_exact": "Local Family Pharmacy"
+    }
+  },
+  "action": "unmatched",
+  "reviewer": "example-reviewer",
+  "reason": "Confirmed private entity with insufficient security linkage.",
+  "mapping_version": "v1"
+}

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+results.jsonl
+results.csv
+results.json
+results.parquet
+benchmark-data/
+.env
+.coverage
+.pytest_cache/
+.symbologylink/
+data/

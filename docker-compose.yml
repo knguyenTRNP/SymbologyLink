@@ -1,0 +1,18 @@
+services:
+  symbologylink:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      SYMBOLOGYLINK_REFERENCE: /data/reference.csv
+      SYMBOLOGYLINK_ENABLE_GLEIF: "true"
+      SYMBOLOGYLINK_ENABLE_OPENFIGI: "true"
+      SYMBOLOGYLINK_OPENFIGI_API_KEY: ${OPENFIGI_API_KEY:-}
+      SYMBOLOGYLINK_ENABLE_SEC: ${SYMBOLOGYLINK_ENABLE_SEC:-false}
+      SYMBOLOGYLINK_SEC_USER_AGENT: ${SYMBOLOGYLINK_SEC_USER_AGENT:-}
+      SYMBOLOGYLINK_OFFLINE: "false"
+      SYMBOLOGYLINK_RELATIONSHIP_MAX_DEPTH: ${SYMBOLOGYLINK_RELATIONSHIP_MAX_DEPTH:-8}
+      SYMBOLOGYLINK_API_KEY: ${SYMBOLOGYLINK_API_KEY:-}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
