@@ -318,6 +318,9 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
     conflict_types = {"identifier_conflict", "exact_name_identifier_conflict", "security_identifier_conflict"}
     conflict_rows = [row for row in result_rows if any(item.get("type") in conflict_types for item in row.get("evidence", []))]
     automatic_match_correct = sum(correct_top1(row) for row in auto)
+    unmatched_rows = [row for row in result_rows if row["status"] == "unmatched"]
+    correctly_unmatched = [row for row in unmatched_rows if truth_rows[row["recordId"]]["expected_match"] == "false"]
+    false_rejections = [row for row in positives if row["status"] == "unmatched"]
 
     def pathway(row: dict[str, Any]) -> str:
         types = {item.get("type") for item in row.get("evidence", [])}
@@ -338,6 +341,15 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
             return "fuzzy_name"
         return row.get("status", "unknown")
 
+    def latency_summary(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        values = sorted(float(row["processingDurationMs"]) for row in rows if row.get("processingDurationMs") is not None)
+        if not values:
+            return None
+        middle = len(values) // 2
+        median = values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+        p95 = values[max(0, math.ceil(len(values) * .95) - 1)]
+        return {"records": len(values), "median": round(median, 4), "p95": round(p95, 4), "max": round(values[-1], 4)}
+
     pathway_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in result_rows:
         pathway_rows[pathway(row)].append(row)
@@ -353,7 +365,7 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
             "coverage": round(len(pathway_auto) / len(rows), 4),
             "decisionAccuracy": round(sum(correct_decision(row) for row in rows) / len(rows), 4),
             "smallSampleWarning": len(rows) < 30,
-            "latencyMs": None,
+            "latencyMs": latency_summary(rows),
         }
 
     calibration_bins: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -393,7 +405,23 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
         "review_queue_precision": round(sum(correct_top1(row) for row in review) / len(review), 4) if review else None,
         "review_queue_size": len(review),
         "false_positive_rate": round(sum(row["status"] == "matched" for row in negatives) / len(negatives), 4) if negatives else None,
-        "unmatched_accuracy": round(sum(row["status"] == "unmatched" for row in negatives) / len(negatives), 4) if negatives else None,
+        "unmatched_accuracy": round(len(correctly_unmatched) / len(unmatched_rows), 4) if unmatched_rows else None,
+        "unmatched_precision": round(len(correctly_unmatched) / len(unmatched_rows), 4) if unmatched_rows else None,
+        "unmatched_correct": len(correctly_unmatched),
+        "unmatched_total": len(unmatched_rows),
+        "negative_recall": round(len(correctly_unmatched) / len(negatives), 4) if negatives else None,
+        "false_rejection_rate": round(len(false_rejections) / len(positives), 4) if positives else None,
+        "false_rejection_count": len(false_rejections),
+        "false_rejection_total": len(positives),
+        "false_rejection_examples": [
+            {
+                "recordId": row["recordId"],
+                "expectedEntityId": truth_rows[row["recordId"]]["expected_entity_id"],
+                "topCandidateEntityIds": ranked_ids(row)[:3],
+                "confidence": row.get("confidence"),
+            }
+            for row in false_rejections[:25]
+        ],
         "direct_parent_accuracy": round(sum(correct_parent(row) for row in parent_rows) / len(parent_rows), 4) if parent_rows else None,
         "relationship_resolution_coverage": round(sum(bool((row.get("relationshipGraph") or {}).get("edges")) for row in positives) / len(positives), 4) if positives else None,
         "security_top_1_accuracy": round(sum(correct_security_top1(row) for row in security_rows) / len(security_rows), 4) if security_rows else None,
@@ -410,7 +438,8 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
         "by_pathway": pathway_metrics,
         "confidence_calibration": confidence_calibration,
         "expected_calibration_error": round(weighted_gap, 4) if result_rows else None,
-        "limitations": ["Synthetic perturbations are not evidence of real-world accuracy.", "Metrics are valid only for the supplied reference master and generated cases."],
+        "latency_ms": latency_summary(result_rows),
+        "limitations": ["Synthetic perturbations are not evidence of real-world accuracy.", "Metrics are valid only for the supplied reference master and generated cases.", "unmatched_accuracy is retained as a compatibility alias for unmatched_precision; negative_recall reports coverage of the negative set."],
     }
 
 
@@ -430,6 +459,8 @@ def render_html_report(metrics: dict[str, Any], output: str | Path) -> None:
         ("Conflict review capture", metrics.get("identifier_conflict_review_rate")),
         ("Temporal verified", metrics.get("overall_temporal_verified_rate")),
         ("False-positive rate", metrics.get("false_positive_rate")),
+        ("Abstention precision", metrics.get("unmatched_precision")),
+        ("False-rejection rate", metrics.get("false_rejection_rate")),
     ]
     cards = "".join(f'<div class="card"><span>{html.escape(label)}</span><strong>{pct(value)}</strong></div>' for label, value in headline)
     rows = "".join(

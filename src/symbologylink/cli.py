@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import sys
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .benchmark import evaluate_results, generate_benchmark, render_html_report
-from .cache import SQLiteCache
+from .cache import CacheError, SQLiteCache
 from .decisions import OverrideStore, RuleSet
 from .engine import MatchEngine
 from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
@@ -25,6 +28,21 @@ STRUCTURED_RESULT_FIELDS = {
 }
 
 SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+@contextmanager
+def _atomic_output_path(output: Path):
+    """Publish a completed file atomically without exposing partial output."""
+    partial = output.with_name(f"{output.name}.{uuid.uuid4().hex}.partial")
+    try:
+        yield partial
+        os.replace(partial, output)
+    except BaseException:
+        try:
+            partial.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def package_version() -> str:
@@ -65,10 +83,25 @@ def _csv_safe_cell(value):
 
 
 def load_mapping(path: str | None, columns: list[str]) -> dict[str, str]:
+    return load_mapping_config(path, columns)[0]
+
+
+def load_mapping_config(path: str | None, columns: list[str]) -> tuple[dict[str, str], str | None, str]:
     if not path:
-        return suggest_mapping(columns)
+        mapping = suggest_mapping(columns)
+        digest = hashlib.sha256(json.dumps(mapping, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return mapping, None, digest
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    return value.get("mapping", value)
+    if isinstance(value, dict) and "mapping" in value:
+        unknown = sorted(set(value) - {"mapping", "dateFormat", "mappingVersion"})
+        if unknown:
+            raise IngestionError(f"Unknown mapping configuration key(s): {', '.join(unknown)}.")
+        mapping = value["mapping"]
+        date_format = value.get("dateFormat")
+    else:
+        mapping, date_format = value, None
+    digest = hashlib.sha256(json.dumps(mapping, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return mapping, date_format, digest
 
 
 def cmd_preview(args: argparse.Namespace) -> int:
@@ -81,16 +114,21 @@ def cmd_preview(args: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     profile = profile_file(args.input)
-    mapping = load_mapping(args.mapping, profile.columns)
-    profile, _ = prepare_records(args.input, mapping, profile)
-    print(json.dumps({"valid": True, "rows": profile.row_count, "columns": len(profile.columns), "mapping": mapping}, indent=2))
+    mapping, configured_date_format, mapping_hash = load_mapping_config(args.mapping, profile.columns)
+    date_format = getattr(args, "date_format", None) or configured_date_format
+    profile, _ = prepare_records(args.input, mapping, profile, date_format)
+    print(json.dumps({"valid": True, "rows": profile.row_count, "columns": len(profile.columns), "mapping": mapping, "dateFormat": date_format, "mappingContentSha256": mapping_hash}, indent=2))
     return 0
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
+    output = Path(args.output)
+    if output.exists() and not getattr(args, "overwrite", False):
+        raise IngestionError(f"Output already exists: {output}. Use --overwrite to replace it.")
     profile = profile_file(args.input)
-    mapping = load_mapping(args.mapping, profile.columns)
-    profile, input_records = prepare_records(args.input, mapping, profile)
+    mapping, configured_date_format, mapping_hash = load_mapping_config(args.mapping, profile.columns)
+    date_format = getattr(args, "date_format", None) or configured_date_format
+    profile, input_records = prepare_records(args.input, mapping, profile, date_format)
     cache = SQLiteCache(args.cache)
     providers = []
     provider_names = {item.strip() for item in args.providers.split(",") if item.strip()}
@@ -110,7 +148,6 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     if not providers:
         raise IngestionError("Enable at least one provider.")
     engine = MatchEngine(providers, MatchConfig(args.auto_threshold, args.review_threshold, args.max_candidates, args.mapping_version, args.relationship_max_depth), RuleSet.load(args.rules), OverrideStore(args.overrides) if args.overrides else None)
-    output = Path(args.output)
     results = [result.to_dict() for result in engine.match_batch(input_records)]
     engine_version = package_version()
     provider_versions = {provider.name: str(getattr(provider, "version", engine_version)) for provider in providers}
@@ -118,24 +155,29 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         result["inputFileSha256"] = profile.sha256
         result["engineVersion"] = engine_version
         result["providerVersions"] = provider_versions
-    if output.suffix.lower() in {".parquet", ".pq"}:
-        try:
-            import pyarrow as pa
-            import pyarrow.parquet as pq
-        except ImportError as exc:
-            raise IngestionError("Parquet output requires: pip install 'symbologylink[parquet]'") from exc
-        pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(results)), output, compression="zstd")
-    elif output.suffix.lower() == ".json":
-        output.write_text(json.dumps(results, indent=2, default=str) + "\n", encoding="utf-8")
-    else:
-        with output.open("w", encoding="utf-8", newline="") as handle:
-            for result in results:
-                handle.write(json.dumps(result, separators=(",", ":"), default=str) + "\n")
-    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
+        result["mappingContentSha256"] = mapping_hash
+    with _atomic_output_path(output) as partial:
+        if output.suffix.lower() in {".parquet", ".pq"}:
+            try:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+            except ImportError as exc:
+                raise IngestionError("Parquet output requires: pip install 'symbologylink[parquet]'") from exc
+            pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(results)), partial, compression="zstd")
+        elif output.suffix.lower() == ".json":
+            partial.write_text(json.dumps(results, indent=2, default=str) + "\n", encoding="utf-8")
+        else:
+            with partial.open("w", encoding="utf-8", newline="") as handle:
+                for result in results:
+                    handle.write(json.dumps(result, separators=(",", ":"), default=str) + "\n")
+    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "mappingContentSha256": mapping_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
     return 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
+    output_path = Path(args.output)
+    if output_path.exists() and not getattr(args, "overwrite", False):
+        raise IngestionError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
     input_path = Path(args.input)
     if input_path.suffix.lower() in {".parquet", ".pq"}:
         rows = [_decode_structured_result(row) for row in read_records(input_path)]
@@ -143,10 +185,14 @@ def cmd_export(args: argparse.Namespace) -> int:
         rows = [_decode_structured_result(row) for row in json.loads(input_path.read_text(encoding="utf-8"))]
     else:
         rows = [_decode_structured_result(json.loads(line)) for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    status_filter = getattr(args, "status", None)
+    if status_filter:
+        allowed_statuses = set(status_filter)
+        rows = [row for row in rows if row.get("status") in allowed_statuses]
     source_fields = list(dict.fromkeys(key for row in rows for key in (row.get("sourceRecord") or {})))
     enrichment_fields = ["record_id", "match_status", "matched_entity_id", "matched_entity_name", "security_decision_status", "security_confidence", "security_id", "security_alternative_count", "identifier_conflict_count", "identifier_conflict_types", "ticker", "exchange", "figi", "confidence", "direct_parent_id", "ultimate_parent_id", "accounting_direct_parent_id", "accounting_ultimate_parent_id", "issuer_id", "entity_validity_status", "security_validity_status", "relationship_validity_status", "overall_validity_status", "valid_on_observation_date", "relationship_status", "mapping_version", "decision_source", "decision_version", "input_file_sha256", "engine_version", "source_metadata_json"]
     fields = list(dict.fromkeys([*source_fields, *enrichment_fields]))
-    with Path(args.output).open("w", encoding="utf-8-sig", newline="") as handle:
+    with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         csv.writer(handle).writerow([_csv_safe_cell(field) for field in fields])
         for row in rows:
@@ -159,7 +205,7 @@ def cmd_export(args: argparse.Namespace) -> int:
                 key: _csv_safe_cell(value)
                 for key, value in {**(row.get("sourceRecord") or {}), **enriched}.items()
             })
-    print(json.dumps({"status": "completed", "records": len(rows), "output": str(Path(args.output).resolve())}, indent=2))
+    print(json.dumps({"status": "completed", "records": len(rows), "statuses": status_filter or "all", "output": str(output_path.resolve())}, indent=2))
     return 0
 
 
@@ -232,9 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("--input", required=True); preview.add_argument("--samples", type=int, default=5); preview.set_defaults(func=cmd_preview)
-    validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.set_defaults(func=cmd_validate)
-    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--output", required=True); resolve.add_argument("--auto-threshold", type=float, default=.98); resolve.add_argument("--review-threshold", type=float, default=.80); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
-    export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.set_defaults(func=cmd_export)
+    validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.add_argument("--date-format"); validate.set_defaults(func=cmd_validate)
+    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--auto-threshold", type=float, default=.98); resolve.add_argument("--review-threshold", type=float, default=.80); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
+    export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.add_argument("--status", action="append", choices=["matched", "review_required", "unmatched", "provider_error"]); export.add_argument("--overwrite", action="store_true"); export.set_defaults(func=cmd_export)
     providers = sub.add_parser("providers"); provider_sub = providers.add_subparsers(required=True); provider_test = provider_sub.add_parser("test"); provider_test.add_argument("--reference"); provider_test.add_argument("--gleif", action="store_true"); provider_test.add_argument("--sec", action="store_true"); provider_test.add_argument("--sec-user-agent"); provider_test.add_argument("--openfigi", action="store_true"); provider_test.add_argument("--openfigi-api-key"); provider_test.add_argument("--cache", default=".symbologylink/cache.sqlite3"); provider_test.add_argument("--offline", action="store_true"); provider_test.set_defaults(func=cmd_provider_test)
     benchmark = sub.add_parser("benchmark"); benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
     benchmark_generate = benchmark_sub.add_parser("generate"); benchmark_generate.add_argument("--reference", required=True); benchmark_generate.add_argument("--output-dir", required=True); benchmark_generate.add_argument("--count", type=int, default=1000); benchmark_generate.add_argument("--seed", type=int, default=20260716); benchmark_generate.set_defaults(func=cmd_benchmark)
@@ -250,7 +296,7 @@ def main() -> int:
     try:
         args = build_parser().parse_args()
         return args.func(args)
-    except (IngestionError, ValueError, OSError) as exc:
+    except (CacheError, IngestionError, ValueError, OSError) as exc:
         print(json.dumps({"error": type(exc).__name__, "message": str(exc), "suggested_action": "Review the input file, mapping, and reference paths."}), file=sys.stderr)
         return 2
 

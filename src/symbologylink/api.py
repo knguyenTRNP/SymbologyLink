@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import threading
+import time
 import uuid
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import asdict, fields
 from pathlib import Path
 from typing import Any
@@ -53,6 +55,26 @@ class Settings:
         self.relationship_max_depth = int(os.getenv("SYMBOLOGYLINK_RELATIONSHIP_MAX_DEPTH", "8"))
         self.offline = os.getenv("SYMBOLOGYLINK_OFFLINE", "false").lower() == "true"
         self.api_key = os.getenv("SYMBOLOGYLINK_API_KEY")
+        self.rate_limit_per_minute = int(os.getenv("SYMBOLOGYLINK_RATE_LIMIT_PER_MINUTE", "30"))
+
+
+class _PerKeyRateLimiter:
+    def __init__(self, limit: int, window_seconds: float = 60):
+        self.limit = max(1, limit)
+        self.window_seconds = window_seconds
+        self.requests: dict[str, deque[float]] = {}
+        self.lock = threading.Lock()
+
+    def retry_after(self, key: str) -> int | None:
+        now = time.monotonic()
+        with self.lock:
+            values = self.requests.setdefault(key, deque())
+            while values and now - values[0] >= self.window_seconds:
+                values.popleft()
+            if len(values) >= self.limit:
+                return max(1, int(self.window_seconds - (now - values[0]) + .999))
+            values.append(now)
+            return None
 
 
 settings = Settings()
@@ -60,6 +82,7 @@ cache = SQLiteCache(settings.cache)
 job_store = JobStore(settings.jobs)
 dataset_store = DatasetStore(settings.datasets, settings.uploads)
 override_store = OverrideStore(settings.overrides)
+rate_limiter = _PerKeyRateLimiter(settings.rate_limit_per_minute)
 
 
 def providers() -> list[MatchProvider]:
@@ -89,6 +112,14 @@ async def authentication_middleware(request: Request, call_next):
     public_paths = {"/health", "/docs", "/openapi.json", "/redoc"}
     if settings.api_key and request.url.path not in public_paths and request.headers.get("X-API-Key") != settings.api_key:
         return JSONResponse(status_code=401, content={"error": {"code": "invalid_api_key", "message": "Supply a valid X-API-Key header."}})
+    if settings.api_key and request.url.path not in public_paths:
+        retry_after = rate_limiter.retry_after(request.headers.get("X-API-Key") or "anonymous")
+        if retry_after is not None:
+            return JSONResponse(
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+                content={"error": {"code": "rate_limit_exceeded", "message": "API key request limit exceeded. Retry later."}},
+            )
     return await call_next(request)
 
 
@@ -275,7 +306,7 @@ def resolve_dataset(dataset_id: str, background_tasks: BackgroundTasks, payload:
     if not mapping:
         raise HTTPException(status_code=422, detail={"code": "mapping_required", "message": "Supply a mapping or upload a dataset with recognizable columns."})
     try:
-        _, prepared = prepare_records(internal["stored_path"], mapping)
+        _, prepared = prepare_records(internal["stored_path"], mapping, date_format=payload.get("dateFormat"))
     except IngestionError as exc:
         raise HTTPException(status_code=422, detail={"code": "dataset_preflight_failed", "message": str(exc)}) from exc
     records = [{field.name: getattr(record, field.name) for field in fields(EntityMatchInput)} for record in prepared]

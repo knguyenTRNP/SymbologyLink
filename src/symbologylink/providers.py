@@ -15,7 +15,16 @@ from typing import Any
 from .cache import SQLiteCache
 from .ingest import read_records
 from .models import EntityMatchInput
-from .normalize import normalize_country, normalize_domain, normalize_identifier, normalize_name
+from .normalize import (
+    normalize_address,
+    normalize_country,
+    normalize_domain,
+    normalize_identifier,
+    normalize_locality,
+    normalize_name,
+    normalize_postal_code,
+    normalize_subdivision,
+)
 from .validity import period, validate_periods
 
 
@@ -42,6 +51,9 @@ class ProviderCandidate:
     provider: str = "unknown"
     domain: str | None = None
     country: str | None = None
+    address_line1: str | None = None
+    city: str | None = None
+    state: str | None = None
     postal_code: str | None = None
     identifiers: dict[str, str] = field(default_factory=dict)
     security: dict[str, Any] | None = None
@@ -214,7 +226,10 @@ class LocalSecurityMasterProvider(MatchProvider):
                 entity_type=row.get("entity_type") or "issuer",
                 provider=self.name,
                 domain=normalize_domain(row.get("domain")), country=normalize_country(row.get("country")),
-                postal_code=str(row.get("postal_code") or "") or None, identifiers=identifiers,
+                address_line1=normalize_address(row.get("address_line1") or row.get("address")),
+                city=normalize_locality(row.get("city")),
+                state=normalize_subdivision(row.get("state") or row.get("region")),
+                postal_code=normalize_postal_code(row.get("postal_code")), identifiers=identifiers,
                 security=security,
                 public_parent={"entityId": parent_id, "canonicalName": parent_name, "entityType": row.get("parent_entity_type") or "legal_entity", "relationshipType": relationship_type, "validFrom": relationship_valid_from, "validTo": relationship_valid_to} if relationship else None,
                 relationships=[relationship] if relationship else [],
@@ -406,7 +421,10 @@ class GLEIFProvider(MatchProvider):
             entity_type="legal_entity",
             provider="gleif",
             country=normalize_country(address.get("country")),
-            postal_code=address.get("postalCode"),
+            address_line1=normalize_address((address.get("addressLines") or [None])[0]),
+            city=normalize_locality(address.get("city")),
+            state=normalize_subdivision(address.get("region")),
+            postal_code=normalize_postal_code(address.get("postalCode")),
             identifiers={"lei": normalize_identifier(lei)} if lei else {},
             # LEI registration is not legal-entity inception; only entity dates are used for point-in-time claims.
             valid_from=(entity.get("creationDate") or "")[:10] or None,
@@ -653,7 +671,7 @@ class SECProvider(MatchProvider):
     def _candidate_from_index(row: dict[str, Any]) -> ProviderCandidate:
         cik = SECProvider._cik(row.get("cik"))
         ticker = normalize_identifier(row.get("ticker"))
-        exchange = normalize_identifier(row.get("exchange"))
+        exchange = normalize_identifier(row.get("exchange"), "exchange")
         return ProviderCandidate(
             entity_id=f"sec:{cik}", canonical_name=str(row.get("name") or cik), entity_type="issuer", provider="sec",
             country="US", identifiers={key: value for key, value in {"cik": cik, "ticker": ticker, "exchange": exchange}.items() if value},
@@ -670,7 +688,7 @@ class SECProvider(MatchProvider):
         ticker, exchange = pairs[0] if pairs else (None, None)
         return ProviderCandidate(
             entity_id=f"sec:{cik}", canonical_name=payload.get("name") or cik, entity_type="issuer", provider="sec", country="US",
-            identifiers={key: value for key, value in {"cik": cik, "ticker": normalize_identifier(ticker), "exchange": normalize_identifier(exchange)}.items() if value},
+            identifiers={key: value for key, value in {"cik": cik, "ticker": normalize_identifier(ticker), "exchange": normalize_identifier(exchange, "exchange")}.items() if value},
             security={"ticker": ticker, "exchange": exchange, "listings": [{"ticker": item[0], "exchange": item[1]} for item in pairs]} if pairs else None,
             aliases=[item for item in aliases if item], sources=["sec"],
         )
@@ -716,13 +734,13 @@ class OpenFIGIProvider(MatchProvider):
     name = "openfigi"
     base_url = "https://api.openfigi.com/v3"
     exchange_to_mic = {
+        "XNAS": "XNAS", "XNYS": "XNYS", "ARCX": "ARCX", "XASE": "XASE",
         "LSE": "XLON", "LONDON": "XLON", "TSX": "XTSE", "TSXV": "XTSX",
         "EURONEXTPARIS": "XPAR", "EURONEXTAMSTERDAM": "XAMS", "XETRA": "XETR",
         "TOKYO": "XTKS", "ASX": "XASX", "SINGAPORE": "XSES", "HONGKONG": "XHKG",
     }
     exchange_to_figi_code = {
-        "NASDAQ": "US", "NASDAQGS": "US", "NASDAQGM": "US", "NASDAQCM": "US",
-        "NYSE": "US", "NYSEARCA": "US", "NYSEAMERICAN": "US",
+        "XNAS": "US", "XNYS": "US", "ARCX": "US", "XASE": "US",
     }
 
     def __init__(self, api_key: str | None = None, cache: SQLiteCache | None = None, timeout: float = 20, retries: int = 2, offline: bool = False, enable_name_search: bool = False):
@@ -771,7 +789,7 @@ class OpenFIGIProvider(MatchProvider):
         if record.ticker:
             job: dict[str, Any] = {"idType": "TICKER", "idValue": normalize_identifier(record.ticker)}
             if record.exchange:
-                exchange = normalize_identifier(record.exchange) or ""
+                exchange = normalize_identifier(record.exchange, "exchange") or ""
                 mic = OpenFIGIProvider.exchange_to_mic.get(exchange)
                 figi_code = OpenFIGIProvider.exchange_to_figi_code.get(exchange)
                 if figi_code:

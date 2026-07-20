@@ -88,6 +88,7 @@ Mappings are JSON documents:
 
 ```json
 {
+  "dateFormat": "%d-%m-%Y",
   "mapping": {
     "merchant_name": "entityName",
     "company_website": "domain",
@@ -97,11 +98,13 @@ Mappings are JSON documents:
 }
 ```
 
+`dateFormat` is optional and uses Python `strptime` syntax. It can also be supplied as `--date-format`. Unknown top-level mapping configuration keys are rejected so misspelled settings cannot fail open. Each result records `mappingContentSha256` alongside the human-readable mapping version.
+
 Every original source row is retained in `sourceRecord`; unknown source columns are also retained in `sourceMetadata`. CSV export writes the original columns beside the enrichment fields. To prevent spreadsheet-formula injection, exported cells beginning with `=`, `+`, `-`, `@`, tab, carriage return, or line feed are prefixed with an apostrophe. JSON and Parquet results retain the original values.
 
 JSON and JSON Lines inputs may be sparse: optional mapped fields can be absent from individual records as long as the field exists somewhere in the dataset. Schema-drift validation still rejects mappings whose source field is absent from the entire file.
 
-CIKs are normalized to ten digits. Blank values and the placeholder tokens `N/A`, `NA`, `UNKNOWN`, `NULL`, `NONE`, and `-` do not contribute matching evidence.
+CIKs are normalized to ten digits. Exchange names, market tiers, and MIC aliases are normalized to MICs—for example, `NASDAQ`, `NasdaqGS`, and `XNAS` become `XNAS`. Country aliases are normalized to valid ISO alpha-2 codes; unsupported country values become null and do not contribute evidence. Street suffixes, leading number words, cities, states, and postal codes are normalized before address comparison. Blank values and the placeholder tokens `N/A`, `NA`, `UNKNOWN`, `NULL`, `NONE`, and `-` do not contribute matching evidence.
 
 ## Customer security master
 
@@ -111,7 +114,7 @@ Frequently used columns:
 
 - Identity: `internal_entity_id`, `canonical_name`, `entity_type`, `aliases`
 - Security: `internal_security_id`, `ticker`, `exchange`, `figi`, `isin`, `cusip`
-- Entity reference: `cik`, `lei`, `domain`, `country`, `postal_code`
+- Entity reference: `cik`, `lei`, `domain`, `country`, `address_line1`, `city`, `state`, `postal_code`
 - Relationships: `parent_entity_id`, `parent_name`, `parent_entity_type`, `relationship_type`
 - Validity: `entity_valid_from`, `entity_valid_to`, `security_valid_from`, `security_valid_to`, `relationship_valid_from`, `relationship_valid_to`
 - Multiple periods: `entity_periods`, `security_periods`, `relationship_periods`
@@ -143,6 +146,8 @@ symbologylink resolve \
 
 Use `--offline` to prohibit network requests and replay cached responses.
 
+Provider responses are cached transactionally. If the SQLite cache is corrupt, Symbology Link quarantines it with a `.corrupt-<timestamp>` suffix and creates a clean cache. Cache failures on unsuitable network or synced filesystems return a structured error; use `--cache` to select a local writable path.
+
 ## Decisions and evidence
 
 Entity decisions use four statuses:
@@ -155,6 +160,8 @@ Entity decisions use four statuses:
 Security decisions are reported independently through `securityDecisionStatus`, `securityConfidence`, `matchedSecurity`, and `securityAlternatives`.
 
 Every selected result includes scored evidence and provider provenance. Strong identifier conflicts, exact-name disagreements, close candidates, and invalid observation-date periods route records to review.
+
+`resolve` and `export` protect existing output files by default; pass `--overwrite` to replace one intentionally. Resolve results are written to a sibling `.partial` file and published under the requested output name only after the write completes. If a run is interrupted, the previous completed output is preserved and the retry is not blocked by a partial result. A review queue can be exported directly with `symbologylink export --input results.jsonl --output review.csv --status review_required`.
 
 Conflict evidence types are:
 
@@ -209,6 +216,7 @@ Important environment variables:
 | `SYMBOLOGYLINK_OPENFIGI_API_KEY` | Optional OpenFIGI API key |
 | `SYMBOLOGYLINK_OFFLINE` | Disable provider network requests |
 | `SYMBOLOGYLINK_API_KEY` | Optional `X-API-Key` authentication |
+| `SYMBOLOGYLINK_RATE_LIMIT_PER_MINUTE` | Per-key request limit; default `30` |
 
 ## Docker
 
@@ -229,7 +237,7 @@ symbologylink benchmark generate \
   --count 1000
 ```
 
-The benchmark is deterministic synthetic regression data. Reports include metric numerators and denominators, Wilson confidence intervals, sample-size warnings, decision-pathway breakdowns, and confidence-calibration bins. It does not represent production accuracy. Public accuracy claims require independently labeled records and a frozen holdout set.
+The benchmark is deterministic synthetic regression data. Reports include metric numerators and denominators, Wilson confidence intervals, sample-size warnings, decision-pathway breakdowns, per-pathway median/P95 latency, confidence-calibration bins, abstention precision, negative recall, false-rejection rate, and representative false-rejection examples. It does not represent production accuracy. Public accuracy claims require independently labeled records and a frozen holdout set.
 
 ## Testing
 
