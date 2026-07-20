@@ -16,6 +16,7 @@ MATCHABLE_FIELDS = {
     "entityName", "legalName", "brandName", "domain", "ticker", "cik",
     "lei", "figi", "isin", "cusip",
 }
+MAX_FIELD_CHARACTERS = 32_768
 
 
 class IngestionError(ValueError):
@@ -141,6 +142,13 @@ def profile_file(path: str | Path, sample_size: int = 5) -> FileProfile:
         raise IngestionError("The file contains no records.")
     if len(rows) > 100_000:
         raise IngestionError("File exceeds the configured 100,000-row limit.")
+    for row_number, row in enumerate(rows, 1):
+        for field_name, value in row.items():
+            if isinstance(value, str) and len(value) > MAX_FIELD_CHARACTERS:
+                raise IngestionError(
+                    f"Field {field_name!r} at data row {row_number} exceeds the "
+                    f"{MAX_FIELD_CHARACTERS:,}-character limit."
+                )
     # JSON and JSON Lines records may legitimately be sparse. Build a stable,
     # first-seen union so optional fields need not appear in the first record.
     columns = list(dict.fromkeys(key for row in rows for key in row))
@@ -207,7 +215,7 @@ def validate_mapping(mapping: dict[str, str], columns: list[str]) -> None:
         raise IngestionError(f"Mapping has no useful entity or security fields. Map at least one of: {fields}.")
 
 
-def _normalize_observation_date(value: Any, row_number: int) -> str | None:
+def _normalize_observation_date(value: Any, row_number: int, date_format: str | None = None) -> str | None:
     if value in (None, ""):
         return None
     try:
@@ -215,10 +223,13 @@ def _normalize_observation_date(value: Any, row_number: int) -> str | None:
             return value.date().isoformat()
         if isinstance(value, date):
             return value.isoformat()
+        if date_format:
+            return datetime.strptime(str(value), date_format).date().isoformat()
         return date.fromisoformat(str(value)).isoformat()
     except (TypeError, ValueError) as exc:
+        expected = date_format or "YYYY-MM-DD"
         raise IngestionError(
-            f"Invalid observation date {value!r} at data row {row_number}; expected ISO format YYYY-MM-DD."
+            f"Invalid observation date {value!r} at data row {row_number}; expected format {expected}."
         ) from exc
 
 
@@ -226,6 +237,7 @@ def prepare_records(
     path: str | Path,
     mapping: dict[str, str],
     profile: FileProfile | None = None,
+    date_format: str | None = None,
 ) -> tuple[FileProfile, list[EntityMatchInput]]:
     """Validate a complete dataset and return canonical records for processing."""
     path = Path(path)
@@ -235,7 +247,7 @@ def prepare_records(
     first_position: dict[str, int] = {}
     for row_number, row in enumerate(read_records(path), 1):
         record = map_row(row, mapping, row_number, path.name)
-        record.observationDate = _normalize_observation_date(record.observationDate, row_number)
+        record.observationDate = _normalize_observation_date(record.observationDate, row_number, date_format)
         previous = first_position.get(record.recordId)
         if previous is not None:
             raise IngestionError(

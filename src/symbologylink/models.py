@@ -33,7 +33,17 @@ class EntityMatchInput:
     sourceRecord: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        from .normalize import normalize_identifier, normalize_null
+        from .normalize import (
+            normalize_address,
+            normalize_country,
+            normalize_identifier,
+            normalize_locality,
+            normalize_null,
+            normalize_postal_code,
+            normalize_subdivision,
+        )
+
+        original_country = self.country
 
         for name in (
             "entityName", "legalName", "brandName", "domain", "ticker", "exchange",
@@ -43,6 +53,18 @@ class EntityMatchInput:
             setattr(self, name, normalize_null(getattr(self, name)))
         for name in ("ticker", "exchange", "cik", "lei", "figi", "isin", "cusip"):
             setattr(self, name, normalize_identifier(getattr(self, name), name))
+        self.addressLine1 = normalize_address(self.addressLine1)
+        self.city = normalize_locality(self.city)
+        self.state = normalize_subdivision(self.state)
+        self.postalCode = normalize_postal_code(self.postalCode)
+        self.country = normalize_country(self.country)
+        if normalize_null(original_country) is not None and self.country is None:
+            self.metadata = dict(self.metadata)
+            warnings = list(self.metadata.get("normalizationWarnings") or [])
+            warning = f"Unsupported country value {original_country!r}; no country evidence was applied."
+            if warning not in warnings:
+                warnings.append(warning)
+            self.metadata["normalizationWarnings"] = warnings
 
 
 @dataclass(slots=True)
@@ -108,6 +130,7 @@ class EntityMatchResult:
     decisionVersion: str | None = None
     sourceRecord: dict[str, Any] = field(default_factory=dict)
     sourceMetadata: dict[str, Any] = field(default_factory=dict)
+    processingDurationMs: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -128,6 +151,9 @@ class MatchConfig:
         "high_name_similarity": 35,
         "country_match": 10,
         "provider_agreement": 5,
+        "address_match": 20,
+        "city_match": 8,
+        "state_match": 8,
         "postal_match": 15,
         "date_valid": 15,
         "entity_date_valid": 15,

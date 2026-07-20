@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import time
 from difflib import SequenceMatcher
 
 from .decisions import Decision, OverrideStore, RuleSet
 from .models import CandidateMatch, EntityMatchInput, EntityMatchResult, MatchConfig, MatchEvidence, SecurityCandidateMatch
-from .normalize import normalize_domain, normalize_identifier, normalize_name
+from .normalize import (
+    normalize_address,
+    normalize_domain,
+    normalize_identifier,
+    normalize_locality,
+    normalize_name,
+    normalize_postal_code,
+    normalize_subdivision,
+)
 from .providers import MatchProvider, ProviderCandidate, ProviderSecurityCandidate
 from .relationships import RelationshipResolver
 from .validity import combine_validity, evaluate_periods, not_applicable, period, relationship_validity
@@ -18,6 +27,11 @@ def _similarity(left: str | None, right: str | None) -> float:
     token_set = len(lt & rt) / len(lt | rt) if lt | rt else 0
     token_sort = SequenceMatcher(None, " ".join(sorted(lt)), " ".join(sorted(rt))).ratio()
     return max(sequence, token_set, token_sort)
+
+
+def _confidence_from_raw(raw: float) -> float:
+    """Convert evidence points to confidence without decreasing at score boundaries."""
+    return max(0.0, min(1.0, raw / 100))
 
 
 class MatchEngine:
@@ -130,13 +144,29 @@ class MatchEngine:
             contribution = w["country_match"] if record.country == candidate.country else w["country_conflict"]
             raw += contribution
             evidence.append(MatchEvidence("country_match" if contribution > 0 else "provider_disagreement", record.country, candidate.country, contribution, candidate.provider))
-        if record.postalCode and candidate.postal_code and record.postalCode == candidate.postal_code:
+        input_address = normalize_address(record.addressLine1)
+        candidate_address = normalize_address(candidate.address_line1)
+        input_city, candidate_city = normalize_locality(record.city), normalize_locality(candidate.city)
+        input_state, candidate_state = normalize_subdivision(record.state), normalize_subdivision(candidate.state)
+        input_postal, candidate_postal = normalize_postal_code(record.postalCode), normalize_postal_code(candidate.postal_code)
+        if input_address and candidate_address and input_address == candidate_address:
+            raw += w["address_match"]
+            evidence.append(MatchEvidence("address_match", input_address, candidate_address, w["address_match"], candidate.provider, detail="street address"))
+        if input_city and candidate_city and input_city == candidate_city:
+            raw += w["city_match"]
+            evidence.append(MatchEvidence("city_match", input_city, candidate_city, w["city_match"], candidate.provider))
+        if input_state and candidate_state and input_state == candidate_state:
+            raw += w["state_match"]
+            evidence.append(MatchEvidence("state_match", input_state, candidate_state, w["state_match"], candidate.provider))
+        if input_postal and candidate_postal and input_postal == candidate_postal:
             raw += w["postal_match"]
-            evidence.append(MatchEvidence("address_match", record.postalCode, candidate.postal_code, w["postal_match"], candidate.provider, detail="postal code"))
+            evidence.append(MatchEvidence("address_match", input_postal, candidate_postal, w["postal_match"], candidate.provider, detail="postal code"))
+        if any((input_address, input_city, input_state, input_postal)) and not any((candidate_address, candidate_city, candidate_state, candidate_postal)):
+            evidence.append(MatchEvidence("address_unavailable", {"addressLine1": input_address, "city": input_city, "state": input_state, "postalCode": input_postal}, None, 0, candidate.provider, detail="The provider candidate has no address components to compare."))
         entity_validity = self._candidate_validity(record, candidate)
         raw += self._add_validity_evidence(record, candidate, "entity", entity_validity, evidence)
-        # Saturating normalization rewards corroborating evidence without letting fuzzy-only matches auto-match.
-        confidence = max(0.0, min(1.0, raw / 100 if raw <= 100 else .80 + .20 * (1 - 2 ** (-(raw - 100) / 50))))
+        # Evidence scores map monotonically to confidence and cap at one.
+        confidence = _confidence_from_raw(raw)
         evidence_types = {item.type for item in evidence if item.scoreContribution > 0}
         strong_identifier_match = any(item.type == "identifier_match" and (item.detail in {"cik", "lei", "figi", "isin", "cusip"} or item.detail == "ticker and exchange") for item in evidence)
         temporal_invalid = entity_validity["validOnObservationDate"] is False
@@ -209,6 +239,9 @@ class MatchEngine:
             provider=winner.provider,
             domain=winner.domain or other.domain,
             country=winner.country or other.country,
+            address_line1=winner.address_line1 or other.address_line1,
+            city=winner.city or other.city,
+            state=winner.state or other.state,
             postal_code=winner.postal_code or other.postal_code,
             identifiers=identifiers,
             security=None,
@@ -330,7 +363,7 @@ class MatchEngine:
             elif candidate_value:
                 raw += w["conflicting_identifier"]
                 evidence.append(MatchEvidence("security_identifier_conflict", value, candidate_value, w["conflicting_identifier"], candidate.provider, detail=field))
-        ticker, exchange = normalize_identifier(record.ticker), normalize_identifier(record.exchange)
+        ticker, exchange = normalize_identifier(record.ticker), normalize_identifier(record.exchange, "exchange")
         ticker_exact = bool(ticker and ticker == candidate.identifiers.get("ticker"))
         exchange_exact = bool(exchange and exchange == candidate.identifiers.get("exchange"))
         exchange_compatible = exchange_exact or bool(exchange and candidate.identifiers.get("exchange") == "US")
@@ -348,7 +381,7 @@ class MatchEngine:
             contribution = w["security_date_valid"] if validity["validOnObservationDate"] is True else w["security_date_invalid"] if validity["validOnObservationDate"] is False else 0
             raw += contribution
             evidence.append(MatchEvidence("security_observation_date_validity", record.observationDate, [{"validFrom": item.get("validFrom"), "validTo": item.get("validTo"), "periodType": item.get("periodType")} for item in validity["periods"]], contribution, candidate.provider, detail=f"{validity['status']}: {validity['reason']}"))
-        confidence = max(0.0, min(1.0, raw / 100 if raw <= 100 else .80 + .20 * (1 - 2 ** (-(raw - 100) / 50))))
+        confidence = _confidence_from_raw(raw)
         strong_exact = any(item.type == "security_identifier_match" and item.detail in {"figi", "isin", "cusip"} for item in evidence)
         conflict = any(item.scoreContribution < -50 for item in evidence)
         invalid = validity["validOnObservationDate"] is False
@@ -365,14 +398,14 @@ class MatchEngine:
         reconciled = self._reconcile_securities(candidates)
         return sorted((self._score_security(record, candidate, selected_entity_id, entities) for candidate in reconciled), key=lambda value: value.confidence, reverse=True)[:self.config.max_candidates]
 
-    def _forced_decision(self, record: EntityMatchInput) -> EntityMatchResult | None:
+    def _forced_decision(self, record: EntityMatchInput) -> Decision | None:
         if self.overrides:
             override = self.overrides.resolve(record)
             if override:
-                return self._decision_result(record, override)
+                return override
         rule = self.rules.resolve(record)
         if rule:
-            return self._decision_result(record, rule)
+            return rule
         return None
 
     @staticmethod
@@ -549,13 +582,19 @@ class MatchEngine:
 
     def match_batch(self, records: list[EntityMatchInput]) -> list[EntityMatchResult]:
         results: dict[str, EntityMatchResult] = {}
+        forced_durations: dict[str, float] = {}
+        ambiguous_decisions: dict[str, Decision] = {}
         unresolved = []
         for record in records:
+            started = time.perf_counter()
             forced = self._forced_decision(record)
-            if forced:
-                results[record.recordId] = forced
+            if forced and forced.action != "ambiguous":
+                results[record.recordId] = self._decision_result(record, forced)
             else:
                 unresolved.append(record)
+                if forced:
+                    ambiguous_decisions[record.recordId] = forced
+            forced_durations[record.recordId] = (time.perf_counter() - started) * 1000
         candidates: dict[str, list[ProviderCandidate]] = {record.recordId: [] for record in unresolved}
         securities: dict[str, list[ProviderSecurityCandidate]] = {record.recordId: [] for record in unresolved}
         errors: dict[str, list[str]] = {record.recordId: [] for record in unresolved}
@@ -566,6 +605,7 @@ class MatchEngine:
             for probe in self._conflict_probes(record):
                 probes.append(probe)
                 probe_owners[probe.recordId] = record.recordId
+        provider_started = time.perf_counter()
         for provider in self.providers:
             try:
                 provider_results = provider.search_bundle_batch(unresolved, self.config.max_candidates)
@@ -590,10 +630,23 @@ class MatchEngine:
                 except Exception as exc:  # base results remain usable when best-effort probing fails
                     for owner in set(probe_owners.values()):
                         probe_warnings[owner].append(f"{provider.name}: conflict discovery unavailable: {exc}")
+        shared_provider_ms = ((time.perf_counter() - provider_started) * 1000 / len(unresolved)) if unresolved else 0
         for record in unresolved:
-            results[record.recordId] = self._finalize(record, candidates[record.recordId], securities[record.recordId], errors[record.recordId], probe_warnings[record.recordId])
+            started = time.perf_counter()
+            result = self._finalize(record, candidates[record.recordId], securities[record.recordId], errors[record.recordId], probe_warnings[record.recordId])
+            result.processingDurationMs = round(forced_durations[record.recordId] + shared_provider_ms + (time.perf_counter() - started) * 1000, 4)
+            decision = ambiguous_decisions.get(record.recordId)
+            if decision:
+                result.status = "review_required"
+                result.decisionSource = decision.source
+                result.decisionVersion = decision.version
+                evidence_type = "human_override" if decision.source == "human_override" else "reusable_rule_match"
+                result.evidence.append(MatchEvidence(evidence_type, provider=decision.source, scoreContribution=0, detail=decision.reason or "Reviewer marked the record ambiguous; ranked candidates were retained."))
+            results[record.recordId] = result
         for record in records:
             result = results[record.recordId]
+            if result.processingDurationMs is None:
+                result.processingDurationMs = round(forced_durations[record.recordId], 4)
             result.sourceRecord = dict(record.sourceRecord)
             result.sourceMetadata = dict(record.metadata)
         return [results[record.recordId] for record in records]
