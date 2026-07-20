@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -11,6 +12,10 @@ from .models import EntityMatchInput
 from .normalize import normalize_country
 
 CANONICAL_FIELDS = set(EntityMatchInput.__dataclass_fields__)
+MATCHABLE_FIELDS = {
+    "entityName", "legalName", "brandName", "domain", "ticker", "cik",
+    "lei", "figi", "isin", "cusip",
+}
 
 
 class IngestionError(ValueError):
@@ -57,9 +62,37 @@ def read_records(path: str | Path) -> Iterator[dict[str, Any]]:
         encoding, delimiter = _sniff_csv(path)
         with path.open(encoding=encoding, newline="") as handle:
             reader = csv.DictReader(handle, delimiter=delimiter)
-            if not reader.fieldnames or len(reader.fieldnames) != len(set(reader.fieldnames)):
-                raise IngestionError("Headers are missing or duplicated.")
-            yield from reader
+            if not reader.fieldnames:
+                raise IngestionError("CSV headers are missing.")
+            positions: dict[str, list[int]] = {}
+            for position, header in enumerate(reader.fieldnames, 1):
+                positions.setdefault(header, []).append(position)
+            duplicates = {header: found for header, found in positions.items() if len(found) > 1}
+            if duplicates:
+                detail = "; ".join(
+                    f"{header!r} at positions {', '.join(map(str, found))}"
+                    for header, found in duplicates.items()
+                )
+                raise IngestionError(f"Duplicate CSV header(s): {detail}.")
+            empty_positions = [str(index) for index, header in enumerate(reader.fieldnames, 1) if not header.strip()]
+            if empty_positions:
+                raise IngestionError(f"Empty CSV header at position(s) {', '.join(empty_positions)}.")
+            expected = len(reader.fieldnames)
+            for row in reader:
+                missing = [header for header in reader.fieldnames if row.get(header) is None]
+                extras = row.get(None) or []
+                if missing or extras:
+                    actual = expected - len(missing) + len(extras)
+                    problems = []
+                    if missing:
+                        problems.append(f"missing value(s) for {', '.join(repr(value) for value in missing)}")
+                    if extras:
+                        problems.append(f"{len(extras)} extra value(s)")
+                    raise IngestionError(
+                        f"Malformed CSV row at file line {reader.line_num}: expected {expected} fields, "
+                        f"found {actual} ({'; '.join(problems)})."
+                    )
+                yield row
     elif suffix in {".jsonl", ".ndjson"}:
         with path.open(encoding="utf-8-sig") as handle:
             for line_number, line in enumerate(handle, 1):
@@ -134,6 +167,76 @@ def map_row(row: dict[str, Any], mapping: dict[str, str], row_number: int, sourc
     canonical["country"] = normalize_country(canonical.get("country"))
     canonical["metadata"] = {key: value for key, value in row.items() if key not in mapped_sources}
     return EntityMatchInput(**canonical)
+
+
+def validate_mapping(mapping: dict[str, str], columns: list[str]) -> None:
+    if not isinstance(mapping, dict) or not mapping:
+        raise IngestionError("Mapping must be a non-empty object of source columns to canonical fields.")
+    missing_sources = [
+        str(source_field) for source_field, target_field in mapping.items()
+        if target_field not in {"", "ignore"} and source_field not in columns
+    ]
+    if missing_sources:
+        raise IngestionError(
+            "Mapping references missing source column(s): " + ", ".join(repr(value) for value in missing_sources)
+            + ". Update the mapping or restore the expected input columns."
+        )
+    mapped_targets: dict[str, str] = {}
+    for source_field, target_field in mapping.items():
+        if not isinstance(target_field, str):
+            raise IngestionError(f"Mapping target for {source_field!r} must be a string.")
+        if target_field in {"", "ignore", "metadata"}:
+            continue
+        if target_field not in CANONICAL_FIELDS:
+            raise IngestionError(f"Unknown canonical field: {target_field}")
+        if target_field in mapped_targets:
+            raise IngestionError(
+                f"Duplicate mapping to canonical field: {target_field} "
+                f"from {mapped_targets[target_field]!r} and {source_field!r}."
+            )
+        mapped_targets[target_field] = str(source_field)
+    if not set(mapped_targets) & MATCHABLE_FIELDS:
+        fields = ", ".join(sorted(MATCHABLE_FIELDS))
+        raise IngestionError(f"Mapping has no useful entity or security fields. Map at least one of: {fields}.")
+
+
+def _normalize_observation_date(value: Any, row_number: int) -> str | None:
+    if value in (None, ""):
+        return None
+    try:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        return date.fromisoformat(str(value)).isoformat()
+    except (TypeError, ValueError) as exc:
+        raise IngestionError(
+            f"Invalid observation date {value!r} at data row {row_number}; expected ISO format YYYY-MM-DD."
+        ) from exc
+
+
+def prepare_records(
+    path: str | Path,
+    mapping: dict[str, str],
+    profile: FileProfile | None = None,
+) -> tuple[FileProfile, list[EntityMatchInput]]:
+    """Validate a complete dataset and return canonical records for processing."""
+    path = Path(path)
+    profile = profile or profile_file(path)
+    validate_mapping(mapping, profile.columns)
+    records: list[EntityMatchInput] = []
+    first_position: dict[str, int] = {}
+    for row_number, row in enumerate(read_records(path), 1):
+        record = map_row(row, mapping, row_number, path.name)
+        record.observationDate = _normalize_observation_date(record.observationDate, row_number)
+        previous = first_position.get(record.recordId)
+        if previous is not None:
+            raise IngestionError(
+                f"Duplicate record identifier {record.recordId!r} at data rows {previous} and {row_number}."
+            )
+        first_position[record.recordId] = row_number
+        records.append(record)
+    return profile, records
 
 
 def suggest_mapping(columns: list[str]) -> dict[str, str]:

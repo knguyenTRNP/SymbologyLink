@@ -12,7 +12,7 @@ from .benchmark import evaluate_results, generate_benchmark, render_html_report
 from .cache import SQLiteCache
 from .decisions import OverrideStore, RuleSet
 from .engine import MatchEngine
-from .ingest import IngestionError, map_row, profile_file, read_records, suggest_mapping
+from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
 from .models import MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider
 
@@ -35,15 +35,7 @@ def cmd_preview(args: argparse.Namespace) -> int:
 def cmd_validate(args: argparse.Namespace) -> int:
     profile = profile_file(args.input)
     mapping = load_mapping(args.mapping, profile.columns)
-    targets = {value for value in mapping.values() if value not in {"ignore", "metadata", ""}}
-    if not targets & {"entityName", "legalName", "brandName", "domain", "ticker", "cik", "lei", "figi", "isin", "cusip"}:
-        raise IngestionError("Mapping has no useful entity or security fields.")
-    seen = set()
-    for index, row in enumerate(read_records(args.input), 1):
-        record = map_row(row, mapping, index, str(Path(args.input).name))
-        if record.recordId in seen:
-            raise IngestionError(f"Duplicate record identifier: {record.recordId}")
-        seen.add(record.recordId)
+    profile, _ = prepare_records(args.input, mapping, profile)
     print(json.dumps({"valid": True, "rows": profile.row_count, "columns": len(profile.columns), "mapping": mapping}, indent=2))
     return 0
 
@@ -51,6 +43,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 def cmd_resolve(args: argparse.Namespace) -> int:
     profile = profile_file(args.input)
     mapping = load_mapping(args.mapping, profile.columns)
+    profile, input_records = prepare_records(args.input, mapping, profile)
     cache = SQLiteCache(args.cache)
     providers = []
     provider_names = {item.strip() for item in args.providers.split(",") if item.strip()}
@@ -71,11 +64,6 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         raise IngestionError("Enable at least one provider.")
     engine = MatchEngine(providers, MatchConfig(args.auto_threshold, args.review_threshold, args.max_candidates, args.mapping_version, args.relationship_max_depth), RuleSet.load(args.rules), OverrideStore(args.overrides) if args.overrides else None)
     output = Path(args.output)
-    results = []
-    input_records = []
-    for index, row in enumerate(read_records(args.input), 1):
-        record = map_row(row, mapping, index, str(Path(args.input).name))
-        input_records.append(record)
     results = [result.to_dict() for result in engine.match_batch(input_records)]
     if output.suffix.lower() in {".parquet", ".pq"}:
         try:
