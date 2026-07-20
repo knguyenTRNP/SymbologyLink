@@ -19,7 +19,7 @@ from .cache import SQLiteCache
 from .decisions import OverrideStore, RuleSet
 from .datasets import DatasetStore
 from .engine import MatchEngine
-from .ingest import IngestionError, map_row, profile_file, read_records, suggest_mapping
+from .ingest import IngestionError, prepare_records, profile_file, suggest_mapping
 from .jobs import JobStore
 from .models import EntityMatchInput, MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, MatchProvider, OpenFIGIProvider, SECProvider
@@ -273,10 +273,11 @@ def resolve_dataset(dataset_id: str, background_tasks: BackgroundTasks, payload:
     mapping = payload.get("mapping") or (dataset.get("profile") or {}).get("suggested_mapping")
     if not mapping:
         raise HTTPException(status_code=422, detail={"code": "mapping_required", "message": "Supply a mapping or upload a dataset with recognizable columns."})
-    records = []
-    for index, row in enumerate(read_records(internal["stored_path"]), 1):
-        record = map_row(row, mapping, index, dataset["filename"])
-        records.append({field.name: getattr(record, field.name) for field in fields(EntityMatchInput)})
+    try:
+        _, prepared = prepare_records(internal["stored_path"], mapping)
+    except IngestionError as exc:
+        raise HTTPException(status_code=422, detail={"code": "dataset_preflight_failed", "message": str(exc)}) from exc
+    records = [{field.name: getattr(record, field.name) for field in fields(EntityMatchInput)} for record in prepared]
     job, created = job_store.create(records, idempotency_key or f"dataset:{dataset_id}:v{dataset['version']}:{json.dumps(mapping, sort_keys=True)}")
     if created:
         background_tasks.add_task(_run_job, job["jobId"])
