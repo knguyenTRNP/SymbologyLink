@@ -115,7 +115,7 @@ class MatchProvider(ABC):
         results: list[ProviderSecurityCandidate] = []
         for instrument in instruments:
             identifiers = {
-                key: normalize_identifier(instrument.get(key) or entity.identifiers.get(key))
+                key: normalize_identifier(instrument.get(key) or entity.identifiers.get(key), key)
                 for key in ("figi", "isin", "cusip", "ticker", "exchange")
                 if instrument.get(key) or entity.identifiers.get(key)
             }
@@ -178,7 +178,7 @@ class LocalSecurityMasterProvider(MatchProvider):
     def _load(self) -> list[ProviderCandidate]:
         rows: list[ProviderCandidate] = []
         for index, row in enumerate(read_records(self.path), 1):
-            identifiers = {k: normalize_identifier(row.get(k)) for k in ("ticker", "exchange", "cik", "lei", "figi", "isin", "cusip") if row.get(k)}
+            identifiers = {k: normalize_identifier(row.get(k), k) for k in ("ticker", "exchange", "cik", "lei", "figi", "isin", "cusip") if row.get(k)}
             entity_valid_from = str(row.get("entity_valid_from") or row.get("valid_from") or "") or None
             entity_valid_to = str(row.get("entity_valid_to") or row.get("valid_to") or "") or None
             entity_periods = _period_values(row.get("entity_periods"), self.name, index, self.path.name) or ([period("entity_existence", entity_valid_from, entity_valid_to, row.get("entity_status"), self.name, sourceRecord=index, sourceFile=self.path.name)] if entity_valid_from or entity_valid_to or row.get("entity_status") else [])
@@ -274,7 +274,7 @@ class LocalSecurityMasterProvider(MatchProvider):
                     identifiers[key] = row.entity_id
 
     def search(self, input_record: EntityMatchInput, limit: int = 20) -> list[ProviderCandidate]:
-        needles = {normalize_identifier(getattr(input_record, field)) for field in ("ticker", "cik", "lei", "figi", "isin", "cusip") if getattr(input_record, field)}
+        needles = {normalize_identifier(getattr(input_record, field), field) for field in ("ticker", "cik", "lei", "figi", "isin", "cusip") if getattr(input_record, field)}
         name = normalize_name(input_record.entityName or input_record.legalName or input_record.brandName)
         domain = normalize_domain(input_record.domain)
         ranked = []

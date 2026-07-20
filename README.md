@@ -68,7 +68,7 @@ symbologylink resolve \
   --output results.jsonl
 ```
 
-Result formats are selected by extension: `.json`, `.jsonl`, or `.parquet`. CSV exports are produced with the `export` command.
+Result formats are selected by extension: `.json`, `.jsonl`, or `.parquet`. CSV exports are produced with the `export` command. Parquet keeps scalar decision fields typed and stores nested evidence, candidates, relationships, validity, and source records as JSON strings for a stable mixed-result schema.
 
 ## Input model
 
@@ -97,7 +97,11 @@ Mappings are JSON documents:
 }
 ```
 
-Unknown source columns are retained in `metadata`.
+Every original source row is retained in `sourceRecord`; unknown source columns are also retained in `sourceMetadata`. CSV export writes the original columns beside the enrichment fields. To prevent spreadsheet-formula injection, exported cells beginning with `=`, `+`, `-`, `@`, tab, carriage return, or line feed are prefixed with an apostrophe. JSON and Parquet results retain the original values.
+
+JSON and JSON Lines inputs may be sparse: optional mapped fields can be absent from individual records as long as the field exists somewhere in the dataset. Schema-drift validation still rejects mappings whose source field is absent from the entire file.
+
+CIKs are normalized to ten digits. Blank values and the placeholder tokens `N/A`, `NA`, `UNKNOWN`, `NULL`, `NONE`, and `-` do not contribute matching evidence.
 
 ## Customer security master
 
@@ -225,7 +229,7 @@ symbologylink benchmark generate \
   --count 1000
 ```
 
-The benchmark is deterministic synthetic regression data. It does not represent production accuracy. Public accuracy claims require independently labeled records and a frozen holdout set.
+The benchmark is deterministic synthetic regression data. Reports include metric numerators and denominators, Wilson confidence intervals, sample-size warnings, decision-pathway breakdowns, and confidence-calibration bins. It does not represent production accuracy. Public accuracy claims require independently labeled records and a frozen holdout set.
 
 ## Testing
 

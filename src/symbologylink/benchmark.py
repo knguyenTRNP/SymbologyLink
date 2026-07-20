@@ -6,6 +6,7 @@ import html
 import json
 import random
 import re
+import math
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -29,12 +30,28 @@ POSITIVE_CATEGORIES = (
 )
 NEGATIVE_CATEGORIES = (
     "fictional_company", "insufficient_information", "invalid_ticker",
-    "generic_name", "lookalike_name",
+    "generic_name", "lookalike_name", "private_company",
 )
 
 
 def _reference_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _wilson_interval(successes: int, total: int, z: float = 1.96) -> dict[str, float | int] | None:
+    if not total:
+        return None
+    proportion = successes / total
+    denominator = 1 + z * z / total
+    center = (proportion + z * z / (2 * total)) / denominator
+    margin = z * math.sqrt((proportion * (1 - proportion) + z * z / (4 * total)) / total) / denominator
+    return {
+        "lower": round(max(0.0, center - margin), 4),
+        "upper": round(min(1.0, center + margin), 4),
+        "confidenceLevel": 0.95,
+        "method": "Wilson score",
+        "sampleSize": total,
+    }
 
 
 def _remove_suffix(name: str) -> str:
@@ -154,6 +171,9 @@ def _negative_case(record_id: str, category: str, index: int) -> dict[str, str]:
         row["entity_name"] = ("National Bank" if index % 2 else "Global Services Group")
     elif category == "lookalike_name":
         row["entity_name"] = f"Microsoft Plumbing {index}" if index % 2 else f"Amazon River Tours {index}"
+    elif category == "private_company":
+        row["entity_name"] = f"Harborview Family Office {index}"
+        row["domain"] = f"harborview-private-{index}.example"
     return row
 
 
@@ -167,7 +187,7 @@ def generate_benchmark(reference: str | Path, output_dir: str | Path, count: int
     candidates = LocalSecurityMasterProvider(reference_path).candidates
     if not candidates:
         raise ValueError("The reference master contains no candidates.")
-    categories = [*POSITIVE_CATEGORIES, *POSITIVE_CATEGORIES, *NEGATIVE_CATEGORIES]
+    categories = [*POSITIVE_CATEGORIES, *NEGATIVE_CATEGORIES]
     records: list[dict[str, str]] = []
     truth: list[dict[str, str]] = []
     for index in range(count):
@@ -228,7 +248,17 @@ def generate_benchmark(reference: str | Path, output_dir: str | Path, count: int
 
 def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
     with Path(truth).open(encoding="utf-8-sig", newline="") as handle:
-        truth_rows = {row["record_id"]: row for row in csv.DictReader(handle)}
+        truth_rows = {}
+        for row in csv.DictReader(handle):
+            if not row.get("record_id"):
+                raise ValueError("Every truth row requires record_id.")
+            row["expected_entity_id"] = row.get("expected_entity_id") or ""
+            row["expected_parent_entity_id"] = row.get("expected_parent_entity_id") or ""
+            row["expected_security_id"] = row.get("expected_security_id") or ""
+            row["expected_match"] = (row.get("expected_match") or ("true" if row["expected_entity_id"] else "false")).lower()
+            row["category"] = row.get("category") or "legacy"
+            row["source_entity_id"] = row.get("source_entity_id") or row["expected_entity_id"]
+            truth_rows[row["record_id"]] = row
     result_rows = [json.loads(line) for line in Path(results).read_text(encoding="utf-8").splitlines() if line.strip()]
     if set(row["recordId"] for row in result_rows) != set(truth_rows):
         raise ValueError("Result and truth record IDs differ; evaluate matching datasets only.")
@@ -274,7 +304,9 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
     for category, rows in sorted(by_category.items()):
         category_parent_rows = [row for row in rows if truth_rows[row["recordId"]]["expected_parent_entity_id"]]
         category_metrics[category] = {
+            "count": len(rows),
             "records": len(rows),
+            "small_sample_warning": len(rows) < 30,
             "candidate_top_1_accuracy": round(sum(correct_top1(row) for row in rows) / len(rows), 4) if truth_rows[rows[0]["recordId"]]["expected_match"] == "true" else None,
             "decision_accuracy": round(sum(correct_decision(row) for row in rows) / len(rows), 4),
             "auto_match_rate": round(sum(row["status"] == "matched" for row in rows) / len(rows), 4),
@@ -285,6 +317,66 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
     temporal_status_counts = {scope: dict(Counter(((row.get("validity") or {}).get(scope) or {}).get("status", "not_available") for row in result_rows)) for scope in ("entity", "security", "relationships", "overall")}
     conflict_types = {"identifier_conflict", "exact_name_identifier_conflict", "security_identifier_conflict"}
     conflict_rows = [row for row in result_rows if any(item.get("type") in conflict_types for item in row.get("evidence", []))]
+    automatic_match_correct = sum(correct_top1(row) for row in auto)
+
+    def pathway(row: dict[str, Any]) -> str:
+        types = {item.get("type") for item in row.get("evidence", [])}
+        details = {item.get("detail") for item in row.get("evidence", [])}
+        if "human_override" in types:
+            return "human_override"
+        if "reusable_rule_match" in types:
+            return "rule"
+        if "identifier_match" in types or "security_identifier_match" in types:
+            return "strong_identifier"
+        if "ticker and exchange" in details:
+            return "ticker_exchange"
+        if "domain_match" in types:
+            return "domain"
+        if any(item.get("type") == "name_similarity" and item.get("similarity") == 1 for item in row.get("evidence", [])):
+            return "exact_name"
+        if "name_similarity" in types:
+            return "fuzzy_name"
+        return row.get("status", "unknown")
+
+    pathway_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in result_rows:
+        pathway_rows[pathway(row)].append(row)
+    pathway_metrics = {}
+    for name, rows in sorted(pathway_rows.items()):
+        pathway_auto = [row for row in rows if row["status"] == "matched"]
+        pathway_correct = sum(correct_top1(row) for row in pathway_auto)
+        pathway_metrics[name] = {
+            "count": len(rows),
+            "records": len(rows),
+            "automaticMatches": len(pathway_auto),
+            "automaticMatchPrecision": round(pathway_correct / len(pathway_auto), 4) if pathway_auto else None,
+            "coverage": round(len(pathway_auto) / len(rows), 4),
+            "decisionAccuracy": round(sum(correct_decision(row) for row in rows) / len(rows), 4),
+            "smallSampleWarning": len(rows) < 30,
+            "latencyMs": None,
+        }
+
+    calibration_bins: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for row in result_rows:
+        calibration_bins[min(int(float(row.get("confidence", 0)) * 5), 4)].append(row)
+    confidence_calibration = []
+    weighted_gap = 0.0
+    for index in range(5):
+        rows = calibration_bins.get(index, [])
+        if not rows:
+            continue
+        mean_confidence = sum(float(row.get("confidence", 0)) for row in rows) / len(rows)
+        observed_accuracy = sum(correct_decision(row) for row in rows) / len(rows)
+        gap = abs(mean_confidence - observed_accuracy)
+        weighted_gap += gap * len(rows) / len(result_rows)
+        confidence_calibration.append({
+            "bin": f"{index / 5:.1f}-{(index + 1) / 5:.1f}",
+            "count": len(rows),
+            "meanConfidence": round(mean_confidence, 4),
+            "observedAccuracy": round(observed_accuracy, 4),
+            "absoluteGap": round(gap, 4),
+            "smallSampleWarning": len(rows) < 30,
+        })
     return {
         "records": len(result_rows),
         "positive_records": len(positives),
@@ -294,6 +386,9 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
         "decision_accuracy": round(sum(correct_decision(row) for row in result_rows) / len(result_rows), 4),
         "positive_resolution_rate": round(sum(row["status"] != "unmatched" for row in positives) / len(positives), 4) if positives else None,
         "automatic_match_precision": round(sum(correct_top1(row) for row in auto) / len(auto), 4) if auto else None,
+        "automatic_match_correct": automatic_match_correct,
+        "automatic_match_total": len(auto),
+        "automatic_match_confidence_interval": _wilson_interval(automatic_match_correct, len(auto)),
         "automatic_match_coverage": round(len(auto) / len(result_rows), 4) if result_rows else 0,
         "review_queue_precision": round(sum(correct_top1(row) for row in review) / len(review), 4) if review else None,
         "review_queue_size": len(review),
@@ -312,6 +407,9 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
         "overall_temporal_verified_rate": round(sum(((row.get("validity") or {}).get("overall") or {}).get("status") == "verified" for row in result_rows) / len(result_rows), 4) if result_rows else None,
         "overall_temporal_invalid_rate": round(sum(((row.get("validity") or {}).get("overall") or {}).get("status") == "invalid" for row in result_rows) / len(result_rows), 4) if result_rows else None,
         "by_category": category_metrics,
+        "by_pathway": pathway_metrics,
+        "confidence_calibration": confidence_calibration,
+        "expected_calibration_error": round(weighted_gap, 4) if result_rows else None,
         "limitations": ["Synthetic perturbations are not evidence of real-world accuracy.", "Metrics are valid only for the supplied reference master and generated cases."],
     }
 

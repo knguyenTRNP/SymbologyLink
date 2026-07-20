@@ -30,6 +30,19 @@ class EntityMatchInput:
     observationDate: str | None = None
     source: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    sourceRecord: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        from .normalize import normalize_identifier, normalize_null
+
+        for name in (
+            "entityName", "legalName", "brandName", "domain", "ticker", "exchange",
+            "cik", "lei", "figi", "isin", "cusip", "addressLine1", "city", "state",
+            "postalCode", "country", "observationDate",
+        ):
+            setattr(self, name, normalize_null(getattr(self, name)))
+        for name in ("ticker", "exchange", "cik", "lei", "figi", "isin", "cusip"):
+            setattr(self, name, normalize_identifier(getattr(self, name), name))
 
 
 @dataclass(slots=True)
@@ -91,6 +104,10 @@ class EntityMatchResult:
     validOnObservationDate: bool | None = None
     pointInTimeStatus: str = "not_verified"
     pointInTimeReason: str | None = None
+    decisionSource: str | None = None
+    decisionVersion: str | None = None
+    sourceRecord: dict[str, Any] = field(default_factory=dict)
+    sourceMetadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
