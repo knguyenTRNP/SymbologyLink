@@ -30,6 +30,18 @@ def _date_applies(observation: str | None, valid_from: str | None, valid_to: str
     return (not valid_from or value >= date.fromisoformat(valid_from)) and (not valid_to or value <= date.fromisoformat(valid_to))
 
 
+def _periods_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_start = date.fromisoformat(left["valid_from"]) if left.get("valid_from") else date.min
+    left_end = date.fromisoformat(left["valid_to"]) if left.get("valid_to") else date.max
+    right_start = date.fromisoformat(right["valid_from"]) if right.get("valid_from") else date.min
+    right_end = date.fromisoformat(right["valid_to"]) if right.get("valid_to") else date.max
+    return max(left_start, right_start) <= min(left_end, right_end)
+
+
+def _stable_signature(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
 def _condition_matches(record: EntityMatchInput, conditions: dict[str, Any]) -> bool:
     name = record.entityName or record.legalName or record.brandName
     for field, clause in conditions.items():
@@ -125,6 +137,22 @@ class RuleSet:
             validate_periods(candidate.relationships, f"Rule {rule['id']} relationships")
             for relationship in candidate.relationships:
                 validate_periods(relationship.get("periods"), f"Rule {rule['id']} relationship periods")
+        active = [rule for rule in self.rules if rule.get("enabled", True)]
+        for index, left in enumerate(active):
+            for right in active[index + 1:]:
+                if int(left.get("priority", 100)) != int(right.get("priority", 100)):
+                    continue
+                if _stable_signature(left.get("conditions")) != _stable_signature(right.get("conditions")):
+                    continue
+                if not _periods_overlap(left, right):
+                    continue
+                left_outcome = {"action": left.get("action", "match"), "result": left.get("result")}
+                right_outcome = {"action": right.get("action", "match"), "result": right.get("result")}
+                if _stable_signature(left_outcome) != _stable_signature(right_outcome):
+                    raise ValueError(
+                        f"Conflicting equal-priority rules {left['id']} and {right['id']} "
+                        "have the same conditions and overlapping validity periods."
+                    )
 
     def resolve(self, record: EntityMatchInput) -> Decision | None:
         for rule in self.rules:

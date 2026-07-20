@@ -31,6 +31,7 @@ def _input(value: dict[str, Any]) -> EntityMatchInput:
     known = {key: item for key, item in value.items() if key in INPUT_FIELDS}
     known["recordId"] = str(known.get("recordId") or uuid.uuid4())
     known["metadata"] = {**value.get("metadata", {}), **{key: item for key, item in value.items() if key not in INPUT_FIELDS}}
+    known["sourceRecord"] = dict(value.get("sourceRecord") or {key: item for key, item in value.items() if key != "sourceRecord"})
     return EntityMatchInput(**known)
 
 

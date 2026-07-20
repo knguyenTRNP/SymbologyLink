@@ -15,6 +15,7 @@ COUNTRIES = {
     "canada": "CA", "germany": "DE", "france": "FR", "japan": "JP",
     "australia": "AU", "netherlands": "NL", "singapore": "SG",
 }
+NULL_TOKENS = {"-", "n/a", "na", "none", "null", "unknown"}
 
 
 def clean_text(value: str | None) -> str | None:
@@ -23,6 +24,14 @@ def clean_text(value: str | None) -> str | None:
     value = unicodedata.normalize("NFKD", str(value))
     value = "".join(c for c in value if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", value).strip()
+
+
+def normalize_null(value):
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().casefold() in NULL_TOKENS:
+        return None
+    return value
 
 
 def normalize_name(value: str | None) -> str | None:
@@ -61,8 +70,12 @@ def normalize_country(value: str | None) -> str | None:
     return COUNTRIES.get(value.casefold(), value.upper())
 
 
-def normalize_identifier(value: str | None) -> str | None:
+def normalize_identifier(value: str | None, identifier_type: str | None = None) -> str | None:
+    value = normalize_null(value)
     if value is None:
         return None
-    return re.sub(r"[^A-Z0-9]", "", str(value).upper()) or None
+    normalized = re.sub(r"[^A-Z0-9]", "", str(value).upper()) or None
+    if normalized and identifier_type == "cik" and normalized.isdigit():
+        return normalized.zfill(10)
+    return normalized
 

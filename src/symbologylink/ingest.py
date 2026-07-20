@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .models import EntityMatchInput
-from .normalize import normalize_country
+from .normalize import normalize_country, normalize_null
 
 CANONICAL_FIELDS = set(EntityMatchInput.__dataclass_fields__)
 MATCHABLE_FIELDS = {
@@ -34,6 +34,7 @@ class FileProfile:
     null_rates: dict[str, float]
     malformed_rows: int = 0
     warnings: list[str] = field(default_factory=list)
+    sha256: str = ""
 
 
 def _sniff_csv(path: Path) -> tuple[str, str]:
@@ -140,13 +141,18 @@ def profile_file(path: str | Path, sample_size: int = 5) -> FileProfile:
         raise IngestionError("The file contains no records.")
     if len(rows) > 100_000:
         raise IngestionError("File exceeds the configured 100,000-row limit.")
-    columns = list(rows[0])
+    # JSON and JSON Lines records may legitimately be sparse. Build a stable,
+    # first-seen union so optional fields need not appear in the first record.
+    columns = list(dict.fromkeys(key for row in rows for key in row))
     if len(columns) > 250:
         raise IngestionError("File exceeds the configured 250-column limit.")
     null_rates = {col: sum(row.get(col) in (None, "") for row in rows) / len(rows) for col in columns}
     suffix = path.suffix.lower()
     encoding, delimiter = _sniff_csv(path) if suffix in {".csv", ".tsv"} else ("utf-8", None)
-    return FileProfile(str(path), suffix.lstrip("."), encoding, delimiter, columns, len(rows), rows[:sample_size], null_rates)
+    return FileProfile(
+        str(path), suffix.lstrip("."), encoding, delimiter, columns, len(rows),
+        rows[:sample_size], null_rates, sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
 
 
 def map_row(row: dict[str, Any], mapping: dict[str, str], row_number: int, source: str) -> EntityMatchInput:
@@ -159,13 +165,14 @@ def map_row(row: dict[str, Any], mapping: dict[str, str], row_number: int, sourc
             raise IngestionError(f"Unknown canonical field: {target_field}")
         if target_field in canonical:
             raise IngestionError(f"Duplicate mapping to canonical field: {target_field}")
-        canonical[target_field] = row.get(source_field) or None
+        canonical[target_field] = normalize_null(row.get(source_field)) or None
         mapped_sources.add(source_field)
     original_id = canonical.get("recordId")
     canonical["recordId"] = str(original_id or hashlib.sha256(f"{source}:{row_number}".encode()).hexdigest()[:20])
     canonical["source"] = canonical.get("source") or source
     canonical["country"] = normalize_country(canonical.get("country"))
     canonical["metadata"] = {key: value for key, value in row.items() if key not in mapped_sources}
+    canonical["sourceRecord"] = {key: value for key, value in row.items() if key is not None}
     return EntityMatchInput(**canonical)
 
 

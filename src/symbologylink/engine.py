@@ -70,10 +70,10 @@ class MatchEngine:
     def _decision_result(self, record: EntityMatchInput, decision: Decision) -> EntityMatchResult:
         evidence_type = "human_override" if decision.source == "human_override" else "reusable_rule_match"
         evidence = [MatchEvidence(evidence_type, provider=decision.source, scoreContribution=100, detail=decision.reason or decision.action)]
-        mapping_version = decision.version or self.config.mapping_version
+        mapping_version = self.config.mapping_version
         if decision.action != "match" or not decision.candidate:
             status = "review_required" if decision.action == "ambiguous" else "unmatched"
-            return EntityMatchResult(record.recordId, status, 0, [], evidence, mapping_version, pointInTimeReason="Decision did not select a dated entity.")
+            return EntityMatchResult(record.recordId, status, 0, [], evidence, mapping_version, pointInTimeReason="Decision did not select a dated entity.", decisionSource=decision.source, decisionVersion=decision.version)
         candidate = decision.candidate
         entity_validity = self._candidate_validity(record, candidate)
         security_candidates = MatchProvider._security_candidates(candidate)
@@ -92,7 +92,7 @@ class MatchEngine:
         status = "matched" if overall["validOnObservationDate"] is not False else "review_required"
         security_match = self._score_security(record, security_candidates[0], candidate.entity_id) if security_candidates else None
         security_status = "matched" if security_match and security_validity.get("validOnObservationDate") is not False else "review_required" if security_match else "not_applicable"
-        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), publicParent=public_parent, relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"])
+        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), publicParent=public_parent, relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], decisionSource=decision.source, decisionVersion=decision.version)
 
     def _score(self, record: EntityMatchInput, candidate: ProviderCandidate) -> CandidateMatch:
         w = self.config.weights
@@ -103,7 +103,7 @@ class MatchEngine:
             contribution = w.get("provider_agreement", 5) * (len(sources) - 1)
             raw += contribution
             evidence.append(MatchEvidence("provider_agreement", sources, candidate.entity_id, contribution, ",".join(sources), detail=f"{len(sources)} providers reconciled"))
-        input_ids = {field: normalize_identifier(getattr(record, field)) for field in ("cik", "lei") if getattr(record, field)}
+        input_ids = {field: normalize_identifier(getattr(record, field), field) for field in ("cik", "lei") if getattr(record, field)}
         for field, value in input_ids.items():
             candidate_value = candidate.identifiers.get(field)
             if candidate_value == value:
@@ -146,6 +146,8 @@ class MatchEngine:
             confidence = max(confidence, .99)
         elif input_name and input_name in candidate_names and not temporal_invalid:
             confidence = max(confidence, .82)
+        elif "domain_match" in evidence_types and not temporal_invalid:
+            confidence = max(confidence, self.config.review_threshold)
         if similarity < 1 and not input_ids and not input_domain:
             confidence = min(confidence, .89)
         return CandidateMatch(candidate.entity_id, candidate.canonical_name, candidate.entity_type, round(confidence, 4), ",".join(sources), None, candidate.public_parent, evidence, entityValidity=entity_validity, securityValidity=not_applicable("security", "Security candidates are ranked independently."))
@@ -162,9 +164,12 @@ class MatchEngine:
             left_value, right_value = left.identifiers.get(field), right.identifiers.get(field)
             if left_value and right_value and left_value != right_value:
                 return False
-        if any(left.identifiers.get(field) and left.identifiers.get(field) == right.identifiers.get(field) for field in strong):
-            return True
         left_name, right_name = normalize_name(left.canonical_name), normalize_name(right.canonical_name)
+        shared_strong = any(left.identifiers.get(field) and left.identifiers.get(field) == right.identifiers.get(field) for field in strong)
+        if shared_strong:
+            if left.provider == right.provider and left.entity_id != right.entity_id:
+                return False
+            return _similarity(left_name, right_name) >= .80
         left_strong = {field for field in strong if left.identifiers.get(field)}
         right_strong = {field for field in strong if right.identifiers.get(field)}
         if left_name and left_name == right_name and left_strong and right_strong:
@@ -316,7 +321,7 @@ class MatchEngine:
             contribution = w.get("provider_agreement", 5) * (len(sources) - 1)
             raw += contribution
             evidence.append(MatchEvidence("security_provider_agreement", sources, candidate.security_id, contribution, ",".join(sources), detail=f"{len(sources)} providers reconciled this security"))
-        input_ids = {field: normalize_identifier(getattr(record, field)) for field in ("figi", "isin", "cusip") if getattr(record, field)}
+        input_ids = {field: normalize_identifier(getattr(record, field), field) for field in ("figi", "isin", "cusip") if getattr(record, field)}
         for field, value in input_ids.items():
             candidate_value = candidate.identifiers.get(field)
             if candidate_value == value:
@@ -407,7 +412,7 @@ class MatchEngine:
 
         strong_signals: list[dict] = []
         for field in ("cik", "lei"):
-            value = normalize_identifier(getattr(record, field))
+            value = normalize_identifier(getattr(record, field), field)
             if not value:
                 continue
             for candidate in entities:
@@ -417,7 +422,7 @@ class MatchEngine:
         securities = self._reconcile_securities(security_values)
         security_signals: list[dict] = []
         for field in ("figi", "isin", "cusip"):
-            value = normalize_identifier(getattr(record, field))
+            value = normalize_identifier(getattr(record, field), field)
             if not value:
                 continue
             for candidate in securities:
@@ -466,8 +471,9 @@ class MatchEngine:
         preliminary_securities = self._rank_securities(record, security_values, None, candidates)
         if preliminary_securities:
             security_best = preliminary_securities[0]
-            exact_security_id = any(item.type == "security_identifier_match" and item.detail in {"figi", "isin", "cusip"} for item in security_best.evidence)
-            if exact_security_id:
+            exact_security_id = any(item.type == "security_identifier_match" and item.detail in {"figi", "isin", "cusip", "ticker and exchange"} for item in security_best.evidence)
+            security_ambiguous = len(preliminary_securities) > 1 and preliminary_securities[1].confidence >= security_best.confidence - .02 and preliminary_securities[1].issuerEntityId != security_best.issuerEntityId
+            if exact_security_id and not security_ambiguous:
                 linked = next((candidate for candidate in ranked if candidate.entityId == security_best.issuerEntityId), None)
                 if linked:
                     linked.confidence = max(linked.confidence, .99)
@@ -586,6 +592,10 @@ class MatchEngine:
                         probe_warnings[owner].append(f"{provider.name}: conflict discovery unavailable: {exc}")
         for record in unresolved:
             results[record.recordId] = self._finalize(record, candidates[record.recordId], securities[record.recordId], errors[record.recordId], probe_warnings[record.recordId])
+        for record in records:
+            result = results[record.recordId]
+            result.sourceRecord = dict(record.sourceRecord)
+            result.sourceMetadata = dict(record.metadata)
         return [results[record.recordId] for record in records]
 
     def match(self, record: EntityMatchInput) -> EntityMatchResult:

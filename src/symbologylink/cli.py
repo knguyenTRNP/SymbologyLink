@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from dataclasses import asdict
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .benchmark import evaluate_results, generate_benchmark, render_html_report
@@ -15,6 +16,52 @@ from .engine import MatchEngine
 from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
 from .models import MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider
+
+
+STRUCTURED_RESULT_FIELDS = {
+    "alternatives", "evidence", "matchedEntity", "matchedSecurity",
+    "securityAlternatives", "publicParent", "relationshipGraph", "validity",
+    "sourceRecord", "sourceMetadata", "providerVersions",
+}
+
+SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def package_version() -> str:
+    try:
+        return version("SymbologyLink")
+    except PackageNotFoundError:
+        return "0.0.0"
+
+
+def _json_value(value) -> str | None:
+    return None if value is None else json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _parquet_safe_rows(rows: list[dict]) -> list[dict]:
+    return [
+        {key: _json_value(value) if key in STRUCTURED_RESULT_FIELDS else value for key, value in row.items()}
+        for row in rows
+    ]
+
+
+def _decode_structured_result(row: dict) -> dict:
+    decoded = dict(row)
+    for key in STRUCTURED_RESULT_FIELDS:
+        value = decoded.get(key)
+        if isinstance(value, str):
+            try:
+                decoded[key] = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+    return decoded
+
+
+def _csv_safe_cell(value):
+    """Prevent exported text from being interpreted as a spreadsheet formula."""
+    if isinstance(value, str) and value.startswith(SPREADSHEET_FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 def load_mapping(path: str | None, columns: list[str]) -> dict[str, str]:
@@ -65,41 +112,53 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     engine = MatchEngine(providers, MatchConfig(args.auto_threshold, args.review_threshold, args.max_candidates, args.mapping_version, args.relationship_max_depth), RuleSet.load(args.rules), OverrideStore(args.overrides) if args.overrides else None)
     output = Path(args.output)
     results = [result.to_dict() for result in engine.match_batch(input_records)]
+    engine_version = package_version()
+    provider_versions = {provider.name: str(getattr(provider, "version", engine_version)) for provider in providers}
+    for result in results:
+        result["inputFileSha256"] = profile.sha256
+        result["engineVersion"] = engine_version
+        result["providerVersions"] = provider_versions
     if output.suffix.lower() in {".parquet", ".pq"}:
         try:
             import pyarrow as pa
             import pyarrow.parquet as pq
         except ImportError as exc:
             raise IngestionError("Parquet output requires: pip install 'symbologylink[parquet]'") from exc
-        pq.write_table(pa.Table.from_pylist(results), output, compression="zstd")
+        pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(results)), output, compression="zstd")
     elif output.suffix.lower() == ".json":
-        output.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+        output.write_text(json.dumps(results, indent=2, default=str) + "\n", encoding="utf-8")
     else:
         with output.open("w", encoding="utf-8", newline="") as handle:
             for result in results:
-                handle.write(json.dumps(result, separators=(",", ":")) + "\n")
-    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version}, indent=2))
+                handle.write(json.dumps(result, separators=(",", ":"), default=str) + "\n")
+    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
     return 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
     if input_path.suffix.lower() in {".parquet", ".pq"}:
-        rows = list(read_records(input_path))
+        rows = [_decode_structured_result(row) for row in read_records(input_path)]
     elif input_path.suffix.lower() == ".json":
-        rows = json.loads(input_path.read_text(encoding="utf-8"))
+        rows = [_decode_structured_result(row) for row in json.loads(input_path.read_text(encoding="utf-8"))]
     else:
-        rows = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    fields = ["record_id", "match_status", "matched_entity_id", "matched_entity_name", "security_decision_status", "security_confidence", "security_id", "security_alternative_count", "identifier_conflict_count", "identifier_conflict_types", "ticker", "exchange", "figi", "confidence", "direct_parent_id", "ultimate_parent_id", "accounting_direct_parent_id", "accounting_ultimate_parent_id", "issuer_id", "entity_validity_status", "security_validity_status", "relationship_validity_status", "overall_validity_status", "valid_on_observation_date", "relationship_status", "mapping_version"]
+        rows = [_decode_structured_result(json.loads(line)) for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    source_fields = list(dict.fromkeys(key for row in rows for key in (row.get("sourceRecord") or {})))
+    enrichment_fields = ["record_id", "match_status", "matched_entity_id", "matched_entity_name", "security_decision_status", "security_confidence", "security_id", "security_alternative_count", "identifier_conflict_count", "identifier_conflict_types", "ticker", "exchange", "figi", "confidence", "direct_parent_id", "ultimate_parent_id", "accounting_direct_parent_id", "accounting_ultimate_parent_id", "issuer_id", "entity_validity_status", "security_validity_status", "relationship_validity_status", "overall_validity_status", "valid_on_observation_date", "relationship_status", "mapping_version", "decision_source", "decision_version", "input_file_sha256", "engine_version", "source_metadata_json"]
+    fields = list(dict.fromkeys([*source_fields, *enrichment_fields]))
     with Path(args.output).open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
-        writer.writeheader()
+        csv.writer(handle).writerow([_csv_safe_cell(field) for field in fields])
         for row in rows:
             entity, security = row.get("matchedEntity") or {}, row.get("matchedSecurity") or {}
             graph = row.get("relationshipGraph") or {}
             validity = row.get("validity") or {}
             conflict_types = [item.get("type") for item in row.get("evidence", []) if item.get("type") in {"identifier_conflict", "exact_name_identifier_conflict", "security_identifier_conflict"}]
-            writer.writerow({"record_id": row["recordId"], "match_status": row["status"], "matched_entity_id": entity.get("entityId"), "matched_entity_name": entity.get("canonicalName"), "security_decision_status": row.get("securityDecisionStatus"), "security_confidence": row.get("securityConfidence"), "security_id": security.get("securityId"), "security_alternative_count": len(row.get("securityAlternatives") or []), "identifier_conflict_count": len(conflict_types), "identifier_conflict_types": "|".join(dict.fromkeys(conflict_types)), "ticker": security.get("ticker"), "exchange": security.get("exchange"), "figi": security.get("figi"), "confidence": row["confidence"], "direct_parent_id": (graph.get("directParent") or {}).get("entityId"), "ultimate_parent_id": (graph.get("ultimateParent") or {}).get("entityId"), "accounting_direct_parent_id": (graph.get("accountingDirectParent") or {}).get("entityId"), "accounting_ultimate_parent_id": (graph.get("accountingUltimateParent") or {}).get("entityId"), "issuer_id": (graph.get("issuer") or {}).get("entityId"), "entity_validity_status": (validity.get("entity") or {}).get("status"), "security_validity_status": (validity.get("security") or {}).get("status"), "relationship_validity_status": (validity.get("relationships") or {}).get("status"), "overall_validity_status": (validity.get("overall") or {}).get("status"), "valid_on_observation_date": (validity.get("overall") or {}).get("validOnObservationDate"), "relationship_status": row.get("relationshipStatus"), "mapping_version": row["mappingVersion"]})
+            enriched = {"record_id": row["recordId"], "match_status": row["status"], "matched_entity_id": entity.get("entityId"), "matched_entity_name": entity.get("canonicalName"), "security_decision_status": row.get("securityDecisionStatus"), "security_confidence": row.get("securityConfidence"), "security_id": security.get("securityId"), "security_alternative_count": len(row.get("securityAlternatives") or []), "identifier_conflict_count": len(conflict_types), "identifier_conflict_types": "|".join(dict.fromkeys(conflict_types)), "ticker": security.get("ticker"), "exchange": security.get("exchange"), "figi": security.get("figi"), "confidence": row["confidence"], "direct_parent_id": (graph.get("directParent") or {}).get("entityId"), "ultimate_parent_id": (graph.get("ultimateParent") or {}).get("entityId"), "accounting_direct_parent_id": (graph.get("accountingDirectParent") or {}).get("entityId"), "accounting_ultimate_parent_id": (graph.get("accountingUltimateParent") or {}).get("entityId"), "issuer_id": (graph.get("issuer") or {}).get("entityId"), "entity_validity_status": (validity.get("entity") or {}).get("status"), "security_validity_status": (validity.get("security") or {}).get("status"), "relationship_validity_status": (validity.get("relationships") or {}).get("status"), "overall_validity_status": (validity.get("overall") or {}).get("status"), "valid_on_observation_date": (validity.get("overall") or {}).get("validOnObservationDate"), "relationship_status": row.get("relationshipStatus"), "mapping_version": row["mappingVersion"], "decision_source": row.get("decisionSource"), "decision_version": row.get("decisionVersion"), "input_file_sha256": row.get("inputFileSha256"), "engine_version": row.get("engineVersion"), "source_metadata_json": _json_value(row.get("sourceMetadata") or {})}
+            writer.writerow({
+                key: _csv_safe_cell(value)
+                for key, value in {**(row.get("sourceRecord") or {}), **enriched}.items()
+            })
     print(json.dumps({"status": "completed", "records": len(rows), "output": str(Path(args.output).resolve())}, indent=2))
     return 0
 
@@ -170,6 +229,7 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="symbologylink", description="Auditable company and security resolution")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {package_version()}")
     sub = parser.add_subparsers(dest="command", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("--input", required=True); preview.add_argument("--samples", type=int, default=5); preview.set_defaults(func=cmd_preview)
     validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.set_defaults(func=cmd_validate)
