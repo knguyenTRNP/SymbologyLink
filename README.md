@@ -161,6 +161,21 @@ Security decisions are reported independently through `securityDecisionStatus`, 
 
 Every selected result includes scored evidence and provider provenance. Strong identifier conflicts, exact-name disagreements, close candidates, and invalid observation-date periods route records to review.
 
+Decisions are made through pathway-specific policies rather than one global threshold. Each result and candidate records `primaryPathway`, `matchScore`, and `scoreIsCalibrated`. Scores are currently uncalibrated, so `scoreIsCalibrated` is `false`; the existing `confidence` field remains temporarily for compatibility and should not be interpreted as a statistical probability.
+
+Default policies allow conflict-free exact identifiers and exact name plus domain to auto-match. Ticker plus exchange can auto-match only when dated evidence verifies that the listing is active; missing or unknown listing validity routes the security to review. Ticker-only, fuzzy-name-only, brand-inference, and relationship-traversal pathways cannot auto-match. Brand-origin records remain on the `brand_inference` pathway even when their normalized name and domain agree. Configure policies with JSON or YAML:
+
+```console
+symbologylink resolve \
+  --input records.csv \
+  --mapping mapping.json \
+  --reference security-master.csv \
+  --decision-policies examples/decision_policies.json \
+  --output results.jsonl
+```
+
+The legacy `--auto-threshold` and `--review-threshold` options remain available during migration, but emit a deprecation warning and cannot be combined with `--decision-policies`.
+
 `resolve` and `export` protect existing output files by default; pass `--overwrite` to replace one intentionally. Resolve results are written to a sibling `.partial` file and published under the requested output name only after the write completes. If a run is interrupted, the previous completed output is preserved and the retry is not blocked by a partial result. A review queue can be exported directly with `symbologylink export --input results.jsonl --output review.csv --status review_required`.
 
 Conflict evidence types are:
@@ -209,6 +224,7 @@ Important environment variables:
 | Variable | Purpose |
 |---|---|
 | `SYMBOLOGYLINK_REFERENCE` | Customer security master |
+| `SYMBOLOGYLINK_DECISION_POLICIES` | JSON or YAML pathway decision policy configuration |
 | `SYMBOLOGYLINK_ENABLE_GLEIF` | Enable GLEIF |
 | `SYMBOLOGYLINK_ENABLE_SEC` | Enable SEC |
 | `SYMBOLOGYLINK_SEC_USER_AGENT` | SEC organization and contact |
