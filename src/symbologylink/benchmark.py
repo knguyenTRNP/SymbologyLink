@@ -323,6 +323,8 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
     false_rejections = [row for row in positives if row["status"] == "unmatched"]
 
     def pathway(row: dict[str, Any]) -> str:
+        if row.get("primaryPathway"):
+            return str(row["primaryPathway"])
         types = {item.get("type") for item in row.get("evidence", [])}
         details = {item.get("detail") for item in row.get("evidence", [])}
         if "human_override" in types:

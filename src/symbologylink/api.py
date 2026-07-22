@@ -18,6 +18,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without API extr
     raise RuntimeError("The API requires: pip install 'symbologylink[api]'") from exc
 
 from .cache import SQLiteCache
+from .decision_policies import DecisionPolicySet
 from .decisions import OverrideStore, RuleSet
 from .datasets import DatasetStore
 from .engine import MatchEngine
@@ -41,6 +42,7 @@ class Settings:
     def __init__(self):
         self.reference = os.getenv("SYMBOLOGYLINK_REFERENCE")
         self.rules = os.getenv("SYMBOLOGYLINK_RULES", ".symbologylink/rules.json")
+        self.decision_policies = os.getenv("SYMBOLOGYLINK_DECISION_POLICIES")
         self.overrides = os.getenv("SYMBOLOGYLINK_OVERRIDES", ".symbologylink/overrides.jsonl")
         self.cache = os.getenv("SYMBOLOGYLINK_CACHE", ".symbologylink/cache.sqlite3")
         self.jobs = os.getenv("SYMBOLOGYLINK_JOBS", ".symbologylink/jobs.sqlite3")
@@ -101,7 +103,7 @@ def providers() -> list[MatchProvider]:
 
 
 def engine() -> MatchEngine:
-    return MatchEngine(providers(), MatchConfig(relationship_max_depth=settings.relationship_max_depth), RuleSet.load(settings.rules), override_store)
+    return MatchEngine(providers(), MatchConfig(relationship_max_depth=settings.relationship_max_depth), RuleSet.load(settings.rules), override_store, DecisionPolicySet.load(settings.decision_policies))
 
 
 app = FastAPI(title="Symbology Link API", version="0.0.0")

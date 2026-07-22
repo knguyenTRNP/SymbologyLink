@@ -90,6 +90,13 @@ class CandidateMatch:
     evidence: list[MatchEvidence] = field(default_factory=list)
     entityValidity: dict[str, Any] | None = None
     securityValidity: dict[str, Any] | None = None
+    matchScore: float | None = None
+    scoreIsCalibrated: bool = False
+    primaryPathway: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.matchScore is None:
+            self.matchScore = self.confidence
 
 
 @dataclass(slots=True)
@@ -103,6 +110,13 @@ class SecurityCandidateMatch:
     security: dict[str, Any] = field(default_factory=dict)
     evidence: list[MatchEvidence] = field(default_factory=list)
     validity: dict[str, Any] | None = None
+    matchScore: float | None = None
+    scoreIsCalibrated: bool = False
+    primaryPathway: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.matchScore is None:
+            self.matchScore = self.confidence
 
 
 @dataclass(slots=True)
@@ -131,6 +145,18 @@ class EntityMatchResult:
     sourceRecord: dict[str, Any] = field(default_factory=dict)
     sourceMetadata: dict[str, Any] = field(default_factory=dict)
     processingDurationMs: float | None = None
+    matchScore: float | None = None
+    scoreIsCalibrated: bool = False
+    primaryPathway: str = "unknown"
+    securityMatchScore: float | None = None
+    securityScoreIsCalibrated: bool = False
+    securityPrimaryPathway: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.matchScore is None:
+            self.matchScore = self.confidence
+        if self.securityMatchScore is None:
+            self.securityMatchScore = self.securityConfidence
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
