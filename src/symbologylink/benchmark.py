@@ -11,6 +11,8 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from .result_schema import v2_to_legacy
+
 from .providers import LocalSecurityMasterProvider, ProviderCandidate
 
 GENERATOR_VERSION = "1.0"
@@ -259,7 +261,8 @@ def evaluate_results(results: str | Path, truth: str | Path) -> dict[str, Any]:
             row["category"] = row.get("category") or "legacy"
             row["source_entity_id"] = row.get("source_entity_id") or row["expected_entity_id"]
             truth_rows[row["record_id"]] = row
-    result_rows = [json.loads(line) for line in Path(results).read_text(encoding="utf-8").splitlines() if line.strip()]
+    raw_result_rows = [json.loads(line) for line in Path(results).read_text(encoding="utf-8").splitlines() if line.strip()]
+    result_rows = [v2_to_legacy(row) if str(row.get("schema_version") or "").startswith("2") else row for row in raw_result_rows]
     if set(row["recordId"] for row in result_rows) != set(truth_rows):
         raise ValueError("Result and truth record IDs differ; evaluate matching datasets only.")
 

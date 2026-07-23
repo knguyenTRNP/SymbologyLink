@@ -120,6 +120,63 @@ class SecurityCandidateMatch:
 
 
 @dataclass(slots=True)
+class ResolutionComponent:
+    status: str
+    canonical_id: str | None = None
+    canonical_name: str | None = None
+    match_score: float | None = None
+    score_is_calibrated: bool = False
+    match_pathway: str | None = None
+    evidence: list[MatchEvidence] = field(default_factory=list)
+    alternatives: list[Any] = field(default_factory=list)
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        allowed = {"verified", "candidate", "ambiguous", "unknown", "contradicted", "not_applicable"}
+        if self.status not in allowed:
+            raise ValueError(f"Unsupported resolution component status: {self.status}")
+
+
+@dataclass(slots=True)
+class MatchResultV2:
+    record_id: str
+    entity: ResolutionComponent
+    public_parent: ResolutionComponent
+    security: ResolutionComponent
+    final_decision: str
+    temporal: dict[str, Any]
+    observation_date: str | None
+    mapping_version: str
+    schema_version: str = "2.0"
+    processed_at: str | None = None
+    relationship_graph: dict[str, Any] | None = None
+    review_reasons: list[str] = field(default_factory=list)
+    decision_source: str | None = None
+    decision_version: str | None = None
+    source_record: dict[str, Any] = field(default_factory=dict)
+    source_metadata: dict[str, Any] = field(default_factory=dict)
+    processing_duration_ms: float | None = None
+    input_file_sha256: str | None = None
+    engine_version: str | None = None
+    provider_versions: dict[str, str] = field(default_factory=dict)
+    mapping_content_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        allowed = {
+            "entity_and_security_matched", "entity_matched_security_unknown", "entity_matched_parent_candidate",
+            "private_entity", "review_required", "ambiguous", "unmatched", "temporal_verification_required",
+            "provider_error", "license_blocked",
+        }
+        if self.final_decision not in allowed:
+            raise ValueError(f"Unsupported final decision: {self.final_decision}")
+        if self.schema_version != "2.0":
+            raise ValueError(f"Unsupported result schema version: {self.schema_version}")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class EntityMatchResult:
     recordId: str
     status: Status
@@ -133,6 +190,7 @@ class EntityMatchResult:
     securityDecisionStatus: str = "not_applicable"
     securityConfidence: float = 0
     securityAlternatives: list[SecurityCandidateMatch] = field(default_factory=list)
+    securityEvidence: list[MatchEvidence] = field(default_factory=list)
     publicParent: dict[str, Any] | None = None
     parentStatus: str = "unknown"
     parentAlternatives: list[dict[str, Any]] = field(default_factory=list)
@@ -154,15 +212,26 @@ class EntityMatchResult:
     securityMatchScore: float | None = None
     securityScoreIsCalibrated: bool = False
     securityPrimaryPathway: str = "unknown"
+    entityDecisionStatus: str | None = None
+    observationDate: str | None = None
 
     def __post_init__(self) -> None:
         if self.matchScore is None:
             self.matchScore = self.confidence
         if self.securityMatchScore is None:
             self.securityMatchScore = self.securityConfidence
+        if self.entityDecisionStatus is None:
+            self.entityDecisionStatus = self.status
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        from .result_schema import result_to_v2
+
+        return result_to_v2(self).to_dict()
+
+    def to_legacy_dict(self) -> dict[str, Any]:
+        from .result_schema import result_to_legacy
+
+        return result_to_legacy(self)
 
 
 @dataclass(slots=True)

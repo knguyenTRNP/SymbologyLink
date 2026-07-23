@@ -68,7 +68,7 @@ symbologylink resolve \
   --output results.jsonl
 ```
 
-Result formats are selected by extension: `.json`, `.jsonl`, or `.parquet`. CSV exports are produced with the `export` command. Parquet keeps scalar decision fields typed and stores nested evidence, candidates, relationships, validity, and source records as JSON strings for a stable mixed-result schema.
+Result formats are selected by extension: `.json`, `.jsonl`, or `.parquet`. Schema `2.0` is emitted by default in every format and by the API. CSV exports are produced with the `export` command. Parquet keeps scalar decision fields typed and stores nested components, evidence, candidates, relationships, temporal results, and source records as JSON strings.
 
 ## Input model
 
@@ -98,9 +98,9 @@ Mappings are JSON documents:
 }
 ```
 
-`dateFormat` is optional and uses Python `strptime` syntax. It can also be supplied as `--date-format`. Unknown top-level mapping configuration keys are rejected so misspelled settings cannot fail open. Each result records `mappingContentSha256` alongside the human-readable mapping version.
+`dateFormat` is optional and uses Python `strptime` syntax. It can also be supplied as `--date-format`. Unknown top-level mapping configuration keys are rejected so misspelled settings cannot fail open. Each result records `mapping_content_sha256` alongside the human-readable mapping version.
 
-Every original source row is retained in `sourceRecord`; unknown source columns are also retained in `sourceMetadata`. CSV export writes the original columns beside the enrichment fields. To prevent spreadsheet-formula injection, exported cells beginning with `=`, `+`, `-`, `@`, tab, carriage return, or line feed are prefixed with an apostrophe. JSON and Parquet results retain the original values.
+Every original source row is retained in `source_record`; unknown source columns are also retained in `source_metadata`. CSV export writes the original columns beside the enrichment fields. To prevent spreadsheet-formula injection, exported cells beginning with `=`, `+`, `-`, `@`, tab, carriage return, or line feed are prefixed with an apostrophe. JSON and Parquet results retain the original values.
 
 JSON and JSON Lines inputs may be sparse: optional mapped fields can be absent from individual records as long as the field exists somewhere in the dataset. Schema-drift validation still rejects mappings whose source field is absent from the entire file.
 
@@ -148,20 +148,28 @@ Use `--offline` to prohibit network requests and replay cached responses.
 
 Provider responses are cached transactionally. If the SQLite cache is corrupt, Symbology Link quarantines it with a `.corrupt-<timestamp>` suffix and creates a clean cache. Cache failures on unsuitable network or synced filesystems return a structured error; use `--cache` to select a local writable path.
 
-## Decisions and evidence
+## Component result schema 2.0
 
-Entity decisions use four statuses:
+Every result contains independent `entity`, `public_parent`, and `security` components. Each component has its own `status`, canonical identity, `match_score`, `match_pathway`, evidence, and alternatives. Component statuses are `verified`, `candidate`, `ambiguous`, `unknown`, `contradicted`, or `not_applicable`.
 
-- `matched`
+`final_decision` summarizes the workflow outcome without erasing partial success:
+
+- `entity_and_security_matched`
+- `entity_matched_security_unknown`
+- `entity_matched_parent_candidate`
+- `private_entity`
 - `review_required`
+- `ambiguous`
 - `unmatched`
+- `temporal_verification_required`
 - `provider_error`
+- `license_blocked`
 
-Security decisions are reported independently through `securityDecisionStatus`, `securityConfidence`, `matchedSecurity`, and `securityAlternatives`.
+For example, an entity can be verified while its parent and security remain unknown. Security ambiguity does not downgrade the entity component, and provider-only parent evidence remains on the parent component.
 
-Every selected result includes scored evidence and provider provenance. Strong identifier conflicts, exact-name disagreements, close candidates, and invalid observation-date periods route records to review.
+Every component includes its own scored evidence and provider provenance. Strong identifier conflicts, exact-name disagreements, close security candidates, and invalid observation-date periods route the affected component to review. Security and parent evidence are not merged into entity evidence.
 
-Decisions are made through pathway-specific policies rather than one global threshold. Each result and candidate records `primaryPathway`, `matchScore`, and `scoreIsCalibrated`. Scores are currently uncalibrated, so `scoreIsCalibrated` is `false`; the existing `confidence` field remains temporarily for compatibility and should not be interpreted as a statistical probability.
+Decisions are made through pathway-specific policies rather than one global threshold. Components record `match_pathway`, `match_score`, and `score_is_calibrated`. Scores are currently uncalibrated, so `score_is_calibrated` is `false` and must not be interpreted as a statistical probability.
 
 Default policies allow conflict-free exact identifiers and exact name plus domain to auto-match. Ticker plus exchange can auto-match only when dated evidence verifies that the listing is active; missing or unknown listing validity routes the security to review. Ticker-only, fuzzy-name-only, brand-inference, and relationship-traversal pathways cannot auto-match. Brand-origin records remain on the `brand_inference` pathway even when their normalized name and domain agree. Configure policies with JSON or YAML:
 
@@ -176,6 +184,22 @@ symbologylink resolve \
 
 The legacy `--auto-threshold` and `--review-threshold` options remain available during migration, but emit a deprecation warning and cannot be combined with `--decision-policies`.
 
+To temporarily emit the pre-2.0 monolithic result shape, pass deprecated `--legacy-output`. Legacy output is never selected implicitly:
+
+```console
+symbologylink resolve ... --output legacy.jsonl --legacy-output
+```
+
+Migrate stored result files conservatively:
+
+```console
+symbologylink migrate results --input v1.jsonl --output v2.jsonl
+```
+
+Migration treats every legacy parent as a candidate. A legacy security becomes verified only when stored evidence contains an exact FIGI, ISIN, CUSIP, or ticker-plus-exchange match. Historical completed jobs in `jobs.sqlite3` are not rewritten.
+
+Flat CSV export includes `record_id`, entity status/identity/score/pathway, parent status/identity/relationship source, security status/identity/listing fields, observation and temporal status, `final_decision`, `review_reason`, `mapping_version`, and `schema_version`, alongside the original source columns.
+
 `resolve` and `export` protect existing output files by default; pass `--overwrite` to replace one intentionally. Resolve results are written to a sibling `.partial` file and published under the requested output name only after the write completes. If a run is interrupted, the previous completed output is preserved and the retry is not blocked by a partial result. A review queue can be exported directly with `symbologylink export --input results.jsonl --output review.csv --status review_required`.
 
 Conflict evidence types are:
@@ -189,7 +213,7 @@ Conflict evidence types are:
 
 Relationship graphs distinguish operational chains from GLEIF accounting-consolidation relationships. Results may include direct parent, ultimate parent, accounting direct parent, accounting ultimate parent, and issuer nodes.
 
-Parent selection is candidate-first. `parentStatus` is one of `verified`, `candidate`, `ambiguous`, `unknown`, or `not_applicable`; `parentAlternatives` retains ranked competing chains and `parentEvidence` explains the decision. SEC, OpenFIGI, GLEIF, and customer security-master relationships are supporting evidence and cannot verify a parent by themselves. A parent is `verified` only when every edge in its selected chain comes from a rule, override, or `customer_relationship_master`. Provider-only and brand-derived parents route the record to review while preserving the matched operating entity.
+Parent selection is candidate-first. `public_parent.status` records the outcome, `public_parent.alternatives` retains ranked competing chains, and `public_parent.evidence` explains the decision. SEC, OpenFIGI, GLEIF, and customer security-master relationships are supporting evidence and cannot verify a parent by themselves. A parent is `verified` only when every edge in its selected chain comes from a rule, override, or `customer_relationship_master`. Provider-only and brand-derived parents route the record to review while preserving the matched operating entity.
 
 Every relationship edge records `source`, `trustLevel`, and `selfReported`. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `ambiguous` and force review.
 
@@ -221,7 +245,7 @@ symbologylink serve --host 127.0.0.1 --port 8000
 
 OpenAPI documentation is available at `http://127.0.0.1:8000/docs`.
 
-The API supports single matches, persistent batch jobs, multipart dataset uploads, previews, replacement, deletion, pagination, cancellation, rules, overrides, cache inspection, and provider health checks.
+The API supports single matches, persistent batch jobs, multipart dataset uploads, previews, replacement, deletion, pagination, cancellation, rules, overrides, cache inspection, and provider health checks. New single and batch results use schema `2.0`. Completed historical job payloads remain stored and returned unchanged.
 
 Important environment variables:
 
