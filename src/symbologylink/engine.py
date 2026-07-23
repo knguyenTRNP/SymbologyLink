@@ -16,7 +16,7 @@ from .normalize import (
     normalize_subdivision,
 )
 from .providers import MatchProvider, ProviderCandidate, ProviderSecurityCandidate
-from .relationships import RelationshipResolver
+from .relationships import RelationshipResolver, parent_resolution
 from .validity import combine_validity, evaluate_periods, not_applicable, period, relationship_validity
 
 
@@ -54,6 +54,52 @@ class MatchEngine:
         for error in graph["errors"]:
             evidence.append(MatchEvidence("relationship_resolution_error", candidate.entity_id, None, 0, "relationship_resolver", detail=error))
         return graph
+
+    def _parent_resolution(self, record: EntityMatchInput, graph: dict, evidence: list[MatchEvidence]) -> dict:
+        resolution = parent_resolution(
+            graph,
+            brand_origin=bool(record.brandName and not (record.entityName or record.legalName)),
+            max_depth=self.config.relationship_max_depth,
+        )
+        parent_evidence: list[MatchEvidence] = []
+        selected = resolution.get("selectedParent")
+        if resolution["status"] == "verified":
+            parent_evidence.append(MatchEvidence(
+                "parent_verified", record.brandName or record.entityName or record.legalName,
+                selected.get("entityId") if selected else None, 0,
+                ",".join(selected.get("sources") or []) if selected else None,
+                detail="The parent chain is supported entirely by customer-approved relationship evidence.",
+            ))
+        elif resolution["status"] == "candidate":
+            parent_evidence.append(MatchEvidence(
+                "parent_candidate", record.brandName or record.entityName or record.legalName,
+                selected.get("entityId") if selected else None, 0,
+                ",".join(selected.get("sources") or []) if selected else None,
+                detail="Provider relationship evidence proposed this parent but did not verify it.",
+            ))
+        elif resolution["status"] == "ambiguous":
+            parent_evidence.append(MatchEvidence(
+                "parent_conflict", record.brandName or record.entityName or record.legalName,
+                [item.get("entityId") for item in resolution["alternatives"]], -100,
+                "relationship_resolver",
+                detail="Relationship sources proposed different parents; the entity match is preserved for review.",
+            ))
+        if selected and selected.get("brandInference") and resolution["status"] != "verified":
+            parent_evidence.append(MatchEvidence(
+                "brand_inference", record.brandName, selected.get("entityId"), 0,
+                ",".join(selected.get("sources") or []),
+                detail="A brand-derived parent remains a candidate until customer-approved relationship evidence confirms it.",
+            ))
+        if resolution.get("authoritativeConflict"):
+            parent_evidence.append(MatchEvidence(
+                "authoritative_parent_conflict", None,
+                [item.get("entityId") for item in resolution["alternatives"] if item.get("status") == "verified"],
+                -100, "relationship_resolver", detail="Authoritative relationship sources disagree.",
+            ))
+        resolution["evidence"] = parent_evidence
+        graph["parentResolution"] = {key: value for key, value in resolution.items() if key != "evidence"}
+        evidence.extend(parent_evidence)
+        return resolution
 
     @staticmethod
     def _candidate_validity(record: EntityMatchInput, candidate: ProviderCandidate) -> dict:
@@ -99,15 +145,14 @@ class MatchEngine:
         self._add_validity_evidence(record, candidate, "security", security_validity, evidence)
         entity = {"entityId": candidate.entity_id, "canonicalName": candidate.canonical_name, "entityType": candidate.entity_type}
         graph = self._relationship_graph(record, candidate, evidence)
+        parent = self._parent_resolution(record, graph, evidence)
         relationship_scope = relationship_validity(graph, record.observationDate)
         self._add_relationship_validity_evidence(record, relationship_scope, evidence)
         validity = combine_validity(record.observationDate, entity_validity, security_validity, relationship_scope)
         overall = validity["overall"]
-        public_parent = (graph.get("issuer") if graph.get("issuer") and graph["issuer"].get("entityId") != candidate.entity_id else None)
-        if not graph.get("edges") or relationship_scope.get("validOnObservationDate") is not False:
-            public_parent = public_parent or candidate.public_parent
+        public_parent = parent.get("selectedParent")
         status = self.decision_policies.decide(primary_pathway, 1.0)
-        if overall["validOnObservationDate"] is False:
+        if overall["validOnObservationDate"] is False or parent["status"] in {"candidate", "ambiguous"}:
             status = "review_required"
         security_match = self._score_security(record, security_candidates[0], candidate.entity_id) if security_candidates else None
         if security_match:
@@ -122,7 +167,7 @@ class MatchEngine:
                 1.0,
                 active_security=security_validity.get("validOnObservationDate") is True,
             )
-        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity if status != "unmatched" else None, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), publicParent=public_parent, relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], decisionSource=decision.source, decisionVersion=decision.version, matchScore=1.0, primaryPathway=primary_pathway, securityMatchScore=1.0 if security_match else 0, securityPrimaryPathway=security_match.primaryPathway if security_match else "unknown")
+        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity if status != "unmatched" else None, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), publicParent=public_parent, parentStatus=parent["status"], parentAlternatives=parent["alternatives"], parentEvidence=parent["evidence"], relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], decisionSource=decision.source, decisionVersion=decision.version, matchScore=1.0, primaryPathway=primary_pathway, securityMatchScore=1.0 if security_match else 0, securityPrimaryPathway=security_match.primaryPathway if security_match else "unknown")
 
     def _score(self, record: EntityMatchInput, candidate: ProviderCandidate) -> CandidateMatch:
         w = self.config.weights
@@ -556,7 +601,8 @@ class MatchEngine:
         exact_identifier_conflict = any(item.type in exact_conflict_types for item in best.evidence)
         entity_status = "review_required" if exact_identifier_conflict or temporal_conflict else self.decision_policies.decide(best.primaryPathway, best.matchScore or 0, has_conflict)
         graph = None
-        public_parent = best.publicParent if entity_status != "unmatched" else None
+        parent = {"status": "unknown", "selectedParent": None, "alternatives": [], "evidence": []}
+        public_parent = None
         validity = None
         selected = None
         relationship_scope = not_applicable("relationships", "No entity was selected.")
@@ -564,11 +610,10 @@ class MatchEngine:
             selected = next((candidate for candidate in candidates if candidate.entity_id == best.entityId), None)
             if selected:
                 graph = self._relationship_graph(record, selected, best.evidence)
+                parent = self._parent_resolution(record, graph, best.evidence)
                 relationship_scope = relationship_validity(graph, record.observationDate)
                 self._add_relationship_validity_evidence(record, relationship_scope, best.evidence)
-                public_parent = (graph.get("issuer") if graph.get("issuer") and graph["issuer"].get("entityId") != selected.entity_id else None)
-                if not graph.get("edges") or relationship_scope.get("validOnObservationDate") is not False:
-                    public_parent = public_parent or best.publicParent
+                public_parent = parent.get("selectedParent")
         has_security_query = any((record.ticker, record.figi, record.isin, record.cusip))
         security_ranked = self._rank_securities(record, security_values, best.entityId if entity_status != "unmatched" else None, candidates)
         security_best = security_ranked[0] if security_ranked else None
@@ -597,6 +642,8 @@ class MatchEngine:
         if selected:
             validity = combine_validity(record.observationDate, best.entityValidity or evaluate_periods("entity", [], record.observationDate), security_scope, relationship_scope)
         status = entity_status
+        if entity_status != "unmatched" and parent["status"] in {"candidate", "ambiguous"}:
+            status = "review_required"
         if entity_status != "unmatched" and has_security_query and security_status != "matched":
             status = "review_required"
         if validity and validity["overall"]["validOnObservationDate"] is False:
@@ -604,7 +651,7 @@ class MatchEngine:
         matched_entity = {"entityId": best.entityId, "canonicalName": best.canonicalName, "entityType": best.entityType} if entity_status != "unmatched" else None
         alternatives = ranked[1:] if entity_status != "unmatched" else ranked
         overall = validity["overall"] if validity else {"status": "not_verified", "validOnObservationDate": None, "reason": "No candidate was selected for complete temporal evaluation."}
-        return EntityMatchResult(record.recordId, status, best.confidence, alternatives, best.evidence, self.config.mapping_version, matchedEntity=matched_entity, matchedSecurity=security_best.security if security_status == "matched" and security_best else None, securityDecisionStatus=security_status, securityConfidence=security_best.confidence if security_best else 0, securityAlternatives=security_ranked[1:] if security_status == "matched" else security_ranked, publicParent=public_parent, relationshipGraph=graph, relationshipStatus=graph["status"] if graph else "not_resolved", validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], primaryPathway=best.primaryPathway, securityPrimaryPathway=security_best.primaryPathway if security_best else "unknown")
+        return EntityMatchResult(record.recordId, status, best.confidence, alternatives, best.evidence, self.config.mapping_version, matchedEntity=matched_entity, matchedSecurity=security_best.security if security_status == "matched" and security_best else None, securityDecisionStatus=security_status, securityConfidence=security_best.confidence if security_best else 0, securityAlternatives=security_ranked[1:] if security_status == "matched" else security_ranked, publicParent=public_parent, parentStatus=parent["status"], parentAlternatives=parent["alternatives"], parentEvidence=parent["evidence"], relationshipGraph=graph, relationshipStatus=graph["status"] if graph else "not_resolved", validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], primaryPathway=best.primaryPathway, securityPrimaryPathway=security_best.primaryPathway if security_best else "unknown")
 
     def match_batch(self, records: list[EntityMatchInput]) -> list[EntityMatchResult]:
         results: dict[str, EntityMatchResult] = {}
