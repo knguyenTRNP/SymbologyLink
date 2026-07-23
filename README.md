@@ -98,7 +98,7 @@ Mappings are JSON documents:
 }
 ```
 
-`dateFormat` is optional and uses Python `strptime` syntax. It can also be supplied as `--date-format`. Unknown top-level mapping configuration keys are rejected so misspelled settings cannot fail open. Each result records `mapping_content_sha256` alongside the human-readable mapping version.
+`dateFormat` is optional and uses Python `strptime` syntax. It can also be supplied as `--date-format`. Unknown top-level mapping configuration keys are rejected so misspelled settings cannot fail open. Each result records `mapping_content_sha256` alongside the human-readable mapping version. `mapping_fingerprint_sha256` additionally covers the mapping version and the complete provider capability/trust matrix, so a trust-policy change produces a different reproducibility fingerprint.
 
 Every original source row is retained in `source_record`; unknown source columns are also retained in `source_metadata`. CSV export writes the original columns beside the enrichment fields. To prevent spreadsheet-formula injection, exported cells beginning with `=`, `+`, `-`, `@`, tab, carriage return, or line feed are prefixed with an apostrophe. JSON and Parquet results retain the original values.
 
@@ -125,12 +125,16 @@ Invalid periods, conflicting entity attributes, duplicate security identifiers, 
 
 ## Providers
 
-| Provider | Coverage | Notes |
+| Provider | Trust | Declared capabilities |
 |---|---|---|
-| Customer security master | Private entity, security, and relationship data | Relationship values remain candidates until approved by a rule, override, or relationship master |
-| SEC | EDGAR filers, CIKs, names, tickers, exchanges | Requires an organization and contact email in the user agent |
-| OpenFIGI | FIGI, ISIN, CUSIP, ticker, and instrument metadata | API key optional; name search disabled by default |
-| GLEIF | LEIs, legal names, addresses, and Level 2 relationships | Public API with cached relationship traversal |
+| Customer security master | Authoritative | Derived from its columns: entity/security lookup, identifier mapping, share class, relationships, and the effective-date scopes actually present |
+| SEC | Supporting | Entity lookup, CIK/ticker mapping, and current entity data |
+| OpenFIGI | Supporting | Security lookup, identifier mapping, current security data, and share-class data; no historical dates |
+| GLEIF | Supporting | Entity/LEI lookup, current self-reported relationships, and relationship effective dates |
+
+Providers declare a `ProviderCapabilities` object and `trust_level`. Undeclared capabilities default to empty with `experimental` trust, which prevents a third-party connector from gaining verification authority merely by returning a field. Human overrides remain highest precedence, followed by rules, authoritative providers, supporting providers, and experimental providers.
+
+Capability checks are enforced during decisioning. Temporal verification requires the matching `entity_effective_dates`, `security_effective_dates`, or `relationship_effective_dates` capability. Share-class fields require `share_class_data`. Parent verification requires authoritative relationship evidence. Unsupported claims are preserved as `provider_capability_rejected` evidence but cannot verify the affected field or period. Supporting data can corroborate authoritative values but cannot overwrite them; conflicting authoritative sources produce a `contradicted` component and require review.
 
 Example provider configuration:
 
@@ -145,6 +149,14 @@ symbologylink resolve \
 ```
 
 Use `--offline` to prohibit network requests and replay cached responses.
+
+Inspect configured health plus the capability/trust matrix:
+
+```console
+symbologylink providers test --reference security-master.csv
+```
+
+Schema 2.0 results include `provider_metadata` as reproducibility provenance. The same metadata is exposed by `GET /v1/providers` and provider health responses.
 
 Provider responses are cached transactionally. If the SQLite cache is corrupt, Symbology Link quarantines it with a `.corrupt-<timestamp>` suffix and creates a clean cache. Cache failures on unsuitable network or synced filesystems return a structured error; use `--cache` to select a local writable path.
 
@@ -207,15 +219,19 @@ Conflict evidence types are:
 - `identifier_conflict`
 - `exact_name_identifier_conflict`
 - `security_identifier_conflict`
+- `authoritative_provider_conflict`
+- `authoritative_security_provider_conflict`
+- `authoritative_parent_conflict`
+- `provider_capability_rejected`
 - `conflict_probe_error`
 
 ## Relationships and point-in-time validity
 
 Relationship graphs distinguish operational chains from GLEIF accounting-consolidation relationships. Results may include direct parent, ultimate parent, accounting direct parent, accounting ultimate parent, and issuer nodes.
 
-Parent selection is candidate-first. `public_parent.status` records the outcome, `public_parent.alternatives` retains ranked competing chains, and `public_parent.evidence` explains the decision. SEC, OpenFIGI, GLEIF, and customer security-master relationships are supporting evidence and cannot verify a parent by themselves. A parent is `verified` only when every edge in its selected chain comes from a rule, override, or `customer_relationship_master`. Provider-only and brand-derived parents route the record to review while preserving the matched operating entity.
+Parent selection is candidate-first. `public_parent.status` records the outcome, `public_parent.alternatives` retains ranked competing chains, and `public_parent.evidence` explains the decision. A customer security master is authoritative for relationship columns it actually supplies; GLEIF and other supporting connectors can propose and corroborate parents but cannot verify them. Every selected edge must be authoritative for the parent to be `verified`. Brand-origin records remain review-only under the default decision policy even when an authoritative relationship verifies their parent.
 
-Every relationship edge records `source`, `trustLevel`, and `selfReported`. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `ambiguous` and force review.
+Every relationship edge records `source`, `trustLevel`, `selfReported`, and whether effective dates are within provider capability. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `contradicted` and force review.
 
 Entity, security, and relationship periods are evaluated independently against `observationDate`. Missing dates remain `not_verified`; current provider records are not assumed to be historically valid.
 

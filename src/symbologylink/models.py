@@ -159,7 +159,9 @@ class MatchResultV2:
     input_file_sha256: str | None = None
     engine_version: str | None = None
     provider_versions: dict[str, str] = field(default_factory=dict)
+    provider_metadata: dict[str, dict[str, Any]] = field(default_factory=dict)
     mapping_content_sha256: str | None = None
+    mapping_fingerprint_sha256: str | None = None
 
     def __post_init__(self) -> None:
         allowed = {
@@ -214,6 +216,8 @@ class EntityMatchResult:
     securityPrimaryPathway: str = "unknown"
     entityDecisionStatus: str | None = None
     observationDate: str | None = None
+    providerMetadata: dict[str, dict[str, Any]] = field(default_factory=dict)
+    mappingFingerprintSha256: str | None = None
 
     def __post_init__(self) -> None:
         if self.matchScore is None:

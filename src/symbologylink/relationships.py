@@ -4,40 +4,42 @@ from datetime import date
 from typing import Any
 
 from .normalize import normalize_identifier, normalize_name
-from .providers import MatchProvider, ProviderCandidate
+from .providers import MatchProvider, ProviderCandidate, provider_metadata_map, source_rank, source_trust_level
 from .validity import evaluate_periods
 
 
-AUTHORITATIVE_RELATIONSHIP_SOURCES = {"human_override", "customer_relationship_master"}
-
-
-def relationship_trust(source: str | None) -> str:
+def relationship_trust(source: str | None, provider_metadata: dict[str, dict[str, Any]] | None = None) -> str:
     """Classify relationship evidence without treating provider data as approval."""
-    value = source or "unknown"
-    if value in AUTHORITATIVE_RELATIONSHIP_SOURCES or value.startswith("override:") or value.startswith("rule:"):
-        return "authoritative"
-    return "supporting"
+    return source_trust_level(source, provider_metadata)
 
 
-def _edge_source(edge: dict[str, Any], fallback: str = "unknown") -> str:
+def _edge_source(edge: dict[str, Any], fallback: str = "unknown", provider_metadata: dict[str, dict[str, Any]] | None = None) -> str:
     explicit = edge.get("source") or edge.get("provider")
     if explicit:
         return str(explicit)
     providers = edge.get("providers") or []
-    return str(min(providers, key=_provider_rank)) if providers else fallback
+    return str(min(providers, key=lambda source: source_rank(source, provider_metadata))) if providers else fallback
 
 
-def annotate_relationship_edge(edge: dict[str, Any], fallback: str = "unknown") -> dict[str, Any]:
-    source = _edge_source(edge, fallback)
+def annotate_relationship_edge(edge: dict[str, Any], fallback: str = "unknown", provider_metadata: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    source = _edge_source(edge, fallback, provider_metadata)
     providers = list(dict.fromkeys(edge.get("providers") or [source]))
-    authoritative = [item for item in providers if relationship_trust(item) == "authoritative"]
+    authoritative = [item for item in providers if relationship_trust(item, provider_metadata) == "authoritative"]
     if authoritative:
-        source = min(authoritative, key=_provider_rank)
+        source = min(authoritative, key=lambda item: source_rank(item, provider_metadata))
+    date_capable = any(
+        item == "human_override" or item.startswith("override:") or item.startswith("rule:")
+        or bool((((provider_metadata or {}).get(item) or {}).get("capabilities") or {}).get("relationship_effective_dates"))
+        for item in providers
+    )
+    valid_on_date_value = edge.get("validOnObservationDate") if date_capable else None
     return {
         **edge,
         "source": source,
-        "trustLevel": "authoritative" if authoritative or relationship_trust(source) == "authoritative" else "supporting",
+        "trustLevel": relationship_trust(source, provider_metadata),
         "selfReported": bool(edge.get("selfReported") or edge.get("self_reported") or "gleif" in providers or source == "gleif"),
+        "effectiveDatesCapable": date_capable,
+        "validOnObservationDate": valid_on_date_value,
         "providers": providers,
     }
 
@@ -59,14 +61,6 @@ def valid_on_date(observation_date: str | None, valid_from: str | None, valid_to
     return (not valid_from or observed >= date.fromisoformat(valid_from[:10])) and (not valid_to or observed <= date.fromisoformat(valid_to[:10]))
 
 
-def _provider_rank(provider: str) -> int:
-    if provider.startswith("override:") or provider == "human_override":
-        return 0
-    if provider.startswith("rule:"):
-        return 1
-    return {"customer_relationship_master": 2, "customer_security_master": 3, "sec": 4, "gleif": 5, "openfigi": 6}.get(provider, 10)
-
-
 def _edge_level(relationship_type: str) -> str:
     value = relationship_type.upper()
     if "ULTIMATE" in value:
@@ -85,7 +79,7 @@ def _edge_family(relationship_type: str) -> str:
     return "ownership"
 
 
-def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: str | None) -> dict[str, Any] | None:
+def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: str | None, provider_metadata: dict[str, dict[str, Any]] | None = None) -> dict[str, Any] | None:
     relationships = list(candidate.relationships)
     if not relationships and candidate.public_parent:
         parent = candidate.public_parent
@@ -135,7 +129,7 @@ def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: 
             "validOnObservationDate": evaluated["validOnObservationDate"] if evaluated else valid_on_date(observation_date, valid_from, valid_to),
             "providers": [provider],
             "provenance": relationship.get("provenance") or [{"provider": provider, "sourceRecord": relationship.get("sourceRecord")}],
-        }, provider))
+        }, provider, provider_metadata))
     source_ids = {edge["fromEntityId"] for edge in edges}
     terminal_nodes = [node for node in nodes if node["entityId"] not in source_ids and node["entityId"] != candidate.entity_id]
     complete = any(node.get("entityType") == "issuer" for node in terminal_nodes) or any(relationship.get("terminal") is True for relationship in relationships)
@@ -145,12 +139,13 @@ def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: 
 class RelationshipResolver:
     """Merge provider hierarchies into one auditable, point-in-time relationship graph."""
 
-    def __init__(self, providers: list[MatchProvider]):
+    def __init__(self, providers: list[MatchProvider], metadata: dict[str, dict[str, Any]] | None = None):
         self.providers = providers
+        self.provider_metadata = metadata or provider_metadata_map(providers)
 
     def resolve(self, candidate: ProviderCandidate, observation_date: str | None = None, max_depth: int = 8) -> dict[str, Any]:
         graphs: list[dict[str, Any]] = []
-        embedded = embedded_relationship_graph(candidate, observation_date)
+        embedded = embedded_relationship_graph(candidate, observation_date, self.provider_metadata)
         if embedded:
             graphs.append(embedded)
         provider_errors: list[str] = []
@@ -163,8 +158,7 @@ class RelationshipResolver:
                 provider_errors.append(f"{provider.name}: {exc}")
         return self._merge(candidate_node(candidate), graphs, provider_errors, observation_date, max_depth)
 
-    @staticmethod
-    def _merge(subject: dict[str, Any], graphs: list[dict[str, Any]], provider_errors: list[str], observation_date: str | None, max_depth: int) -> dict[str, Any]:
+    def _merge(self, subject: dict[str, Any], graphs: list[dict[str, Any]], provider_errors: list[str], observation_date: str | None, max_depth: int) -> dict[str, Any]:
         nodes: list[dict[str, Any]] = []
         aliases: dict[str, str] = {}
         strong_index: dict[tuple[str, str], str] = {}
@@ -181,8 +175,8 @@ class RelationshipResolver:
             existing = next((item for item in nodes if item["entityId"] == existing_id), None) if existing_id else None
             providers = list(dict.fromkeys(raw.get("providers") or ([raw.get("provider")] if raw.get("provider") else [])))
             if existing:
-                current_rank = min((_provider_rank(item) for item in existing.get("providers", [])), default=10)
-                incoming_rank = min((_provider_rank(item) for item in providers), default=10)
+                current_rank = min((source_rank(item, self.provider_metadata) for item in existing.get("providers", [])), default=10)
+                incoming_rank = min((source_rank(item, self.provider_metadata) for item in providers), default=10)
                 if incoming_rank < current_rank:
                     existing["canonicalName"] = raw.get("canonicalName") or existing["canonicalName"]
                     existing["entityType"] = raw.get("entityType") or existing["entityType"]
@@ -225,13 +219,13 @@ class RelationshipResolver:
                 existing = next((item for item in edges if item["fromEntityId"] == source and item["toEntityId"] == target and item["relationshipType"] == relationship_type), None)
                 if existing:
                     existing["providers"] = list(dict.fromkeys([*existing["providers"], *providers]))
-                    annotated = annotate_relationship_edge(existing, graph_provider)
-                    existing.update({key: annotated[key] for key in ("source", "trustLevel", "selfReported", "providers")})
+                    annotated = annotate_relationship_edge(existing, graph_provider, self.provider_metadata)
+                    existing.update({key: annotated[key] for key in ("source", "trustLevel", "selfReported", "effectiveDatesCapable", "validOnObservationDate", "providers")})
                     existing["provenance"].extend(item for item in (raw.get("provenance") or []) if item not in existing["provenance"])
                     for item in raw.get("periods") or []:
                         if item not in existing["periods"]:
                             existing["periods"].append(item)
-                    if existing["periods"]:
+                    if existing["periods"] and existing.get("effectiveDatesCapable"):
                         existing["validOnObservationDate"] = evaluate_periods("relationships", existing["periods"], observation_date)["validOnObservationDate"]
                     continue
                 valid_from, valid_to = raw.get("validFrom"), raw.get("validTo")
@@ -247,7 +241,7 @@ class RelationshipResolver:
                     "validOnObservationDate": raw.get("validOnObservationDate") if "validOnObservationDate" in raw else valid_on_date(observation_date, valid_from, valid_to),
                     "providers": providers,
                     "provenance": list(raw.get("provenance") or [{"provider": graph_provider}]),
-                }, graph_provider))
+                }, graph_provider, self.provider_metadata))
 
         conflicts: list[dict[str, Any]] = []
         chain_ids = [subject_id]
@@ -257,7 +251,7 @@ class RelationshipResolver:
             outgoing = [edge for edge in edges if edge["fromEntityId"] == current and edge["level"] == "direct" and edge.get("validOnObservationDate") is not False and (edge.get("status") != "INACTIVE" or edge.get("validOnObservationDate") is True)]
             if not outgoing:
                 break
-            outgoing.sort(key=lambda edge: (min((_provider_rank(provider) for provider in edge["providers"]), default=10), edge["relationshipType"], edge["toEntityId"]))
+            outgoing.sort(key=lambda edge: (min((source_rank(provider, self.provider_metadata) for provider in edge["providers"]), default=10), edge["relationshipType"], edge["toEntityId"]))
             chosen = outgoing[0]
             same_family = [edge for edge in outgoing[1:] if _edge_family(edge["relationshipType"]) == _edge_family(chosen["relationshipType"]) and edge["toEntityId"] != chosen["toEntityId"]]
             if same_family:
@@ -326,6 +320,7 @@ class RelationshipResolver:
             "reportingExceptions": exceptions,
             "conflicts": conflicts,
             "errors": errors,
+            "providerMetadata": self.provider_metadata,
         }
 
 
@@ -334,8 +329,9 @@ def parent_resolution(graph: dict[str, Any], brand_origin: bool = False, max_dep
     subject = graph.get("subject") or {}
     subject_id = subject.get("entityId")
     nodes = {node.get("entityId"): node for node in graph.get("nodes") or []}
+    provider_metadata = graph.get("providerMetadata") or {}
     eligible = [
-        annotate_relationship_edge(edge)
+        annotate_relationship_edge(edge, provider_metadata=provider_metadata)
         for edge in graph.get("edges") or []
         if edge.get("validOnObservationDate") is not False
         and (edge.get("status") != "INACTIVE" or edge.get("validOnObservationDate") is True)
@@ -396,14 +392,18 @@ def parent_resolution(graph: dict[str, Any], brand_origin: bool = False, max_dep
 
     alternatives.sort(key=lambda item: (
         0 if item["status"] == "verified" else 1,
-        min((_provider_rank(source) for source in item["sources"]), default=10),
+        min((source_rank(source, provider_metadata) for source in item["sources"]), default=10),
         str(item.get("entityId")),
     ))
     for rank, alternative in enumerate(alternatives, 1):
         alternative["rank"] = rank
 
     distinct = {item.get("entityId") for item in alternatives}
-    if len(distinct) > 1:
+    authoritative_targets = [item.get("entityId") for item in alternatives if item["status"] == "verified"]
+    authoritative_conflict = len(set(authoritative_targets)) > 1
+    if authoritative_conflict:
+        status = "contradicted"
+    elif len(distinct) > 1:
         status = "ambiguous"
     elif alternatives:
         status = alternatives[0]["status"]
@@ -411,10 +411,9 @@ def parent_resolution(graph: dict[str, Any], brand_origin: bool = False, max_dep
         status = "not_applicable"
     else:
         status = "unknown"
-    authoritative_targets = [item.get("entityId") for item in alternatives if item["status"] == "verified"]
     return {
         "status": status,
         "selectedParent": alternatives[0] if alternatives else None,
         "alternatives": alternatives,
-        "authoritativeConflict": len(set(authoritative_targets)) > 1,
+        "authoritativeConflict": authoritative_conflict,
     }

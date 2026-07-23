@@ -19,16 +19,17 @@ from .decisions import OverrideStore, RuleSet
 from .engine import MatchEngine
 from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
 from .models import MatchConfig
-from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider
+from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider, provider_configuration_fingerprint
 from .result_schema import SCHEMA_VERSION, legacy_to_v2
 
 
 STRUCTURED_RESULT_FIELDS = {
     "entity", "public_parent", "security", "temporal", "relationship_graph", "review_reasons",
     "source_record", "source_metadata", "provider_versions",
+    "provider_metadata",
     "alternatives", "evidence", "matchedEntity", "matchedSecurity",
     "securityAlternatives", "publicParent", "parentAlternatives", "parentEvidence", "relationshipGraph", "validity",
-    "sourceRecord", "sourceMetadata", "providerVersions",
+    "sourceRecord", "sourceMetadata", "providerVersions", "providerMetadata",
 }
 
 SPREADSHEET_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
@@ -54,6 +55,10 @@ def package_version() -> str:
         return version("SymbologyLink")
     except PackageNotFoundError:
         return "0.0.0"
+
+
+def mapping_fingerprint(mapping_version: str, mapping_content_sha256: str, provider_metadata: dict) -> str:
+    return provider_configuration_fingerprint(mapping_version, mapping_content_sha256, provider_metadata)
 
 
 def _json_value(value) -> str | None:
@@ -208,19 +213,25 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     results = [result.to_legacy_dict() if legacy_output else result.to_dict() for result in matched_results]
     engine_version = package_version()
     provider_versions = {provider.name: str(getattr(provider, "version", engine_version)) for provider in providers}
+    provider_metadata = engine.provider_metadata
+    mapping_profile_hash = mapping_fingerprint(args.mapping_version, mapping_hash, provider_metadata)
     for result in results:
         if legacy_output:
             result["inputFileSha256"] = profile.sha256
             result["engineVersion"] = engine_version
             result["providerVersions"] = provider_versions
+            result["providerMetadata"] = provider_metadata
             result["mappingContentSha256"] = mapping_hash
+            result["mappingFingerprintSha256"] = mapping_profile_hash
         else:
             result["input_file_sha256"] = profile.sha256
             result["engine_version"] = engine_version
             result["provider_versions"] = provider_versions
+            result["provider_metadata"] = provider_metadata
             result["mapping_content_sha256"] = mapping_hash
+            result["mapping_fingerprint_sha256"] = mapping_profile_hash
     _write_result_rows(output, results)
-    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "schemaVersion": "1.x-legacy" if legacy_output else SCHEMA_VERSION, "mappingContentSha256": mapping_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
+    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "schemaVersion": "1.x-legacy" if legacy_output else SCHEMA_VERSION, "mappingContentSha256": mapping_hash, "mappingFingerprintSha256": mapping_profile_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions, "providerMetadata": provider_metadata}, indent=2))
     return 0
 
 
@@ -288,21 +299,24 @@ def cmd_migrate_results(args: argparse.Namespace) -> int:
 
 
 def cmd_provider_test(args: argparse.Namespace) -> int:
-    values = []
+    providers = []
     if args.reference:
-        values.append(LocalSecurityMasterProvider(args.reference).health_check())
+        providers.append(LocalSecurityMasterProvider(args.reference))
     if args.gleif:
-        values.append(GLEIFProvider(SQLiteCache(args.cache), offline=args.offline).health_check())
+        providers.append(GLEIFProvider(SQLiteCache(args.cache), offline=args.offline))
     if args.sec:
         user_agent = args.sec_user_agent or os.getenv("SEC_USER_AGENT")
         if not user_agent:
             raise IngestionError("SEC requires --sec-user-agent 'Organization contact@example.com'.")
-        values.append(SECProvider(user_agent, SQLiteCache(args.cache), offline=args.offline).health_check())
+        providers.append(SECProvider(user_agent, SQLiteCache(args.cache), offline=args.offline))
     if args.openfigi:
-        values.append(OpenFIGIProvider(args.openfigi_api_key or os.getenv("OPENFIGI_API_KEY"), SQLiteCache(args.cache), offline=args.offline).health_check())
-    if not values:
+        providers.append(OpenFIGIProvider(args.openfigi_api_key or os.getenv("OPENFIGI_API_KEY"), SQLiteCache(args.cache), offline=args.offline))
+    if not providers:
         raise IngestionError("Choose --reference and/or --gleif.")
-    print(json.dumps(values, indent=2))
+    print(json.dumps({
+        "providers": [provider.health_check() for provider in providers],
+        "capabilityTrustMatrix": [provider.metadata() for provider in providers],
+    }, indent=2))
     return 0
 
 
