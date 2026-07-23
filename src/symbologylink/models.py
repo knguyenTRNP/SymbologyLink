@@ -134,6 +134,9 @@ class EntityMatchResult:
     securityConfidence: float = 0
     securityAlternatives: list[SecurityCandidateMatch] = field(default_factory=list)
     publicParent: dict[str, Any] | None = None
+    parentStatus: str = "unknown"
+    parentAlternatives: list[dict[str, Any]] = field(default_factory=list)
+    parentEvidence: list[MatchEvidence] = field(default_factory=list)
     relationshipGraph: dict[str, Any] | None = None
     relationshipStatus: str = "not_resolved"
     validity: dict[str, Any] | None = None

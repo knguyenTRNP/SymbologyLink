@@ -127,7 +127,7 @@ Invalid periods, conflicting entity attributes, duplicate security identifiers, 
 
 | Provider | Coverage | Notes |
 |---|---|---|
-| Customer security master | Private entity, security, and relationship data | Preferred identifiers and relationships |
+| Customer security master | Private entity, security, and relationship data | Relationship values remain candidates until approved by a rule, override, or relationship master |
 | SEC | EDGAR filers, CIKs, names, tickers, exchanges | Requires an organization and contact email in the user agent |
 | OpenFIGI | FIGI, ISIN, CUSIP, ticker, and instrument metadata | API key optional; name search disabled by default |
 | GLEIF | LEIs, legal names, addresses, and Level 2 relationships | Public API with cached relationship traversal |
@@ -188,6 +188,10 @@ Conflict evidence types are:
 ## Relationships and point-in-time validity
 
 Relationship graphs distinguish operational chains from GLEIF accounting-consolidation relationships. Results may include direct parent, ultimate parent, accounting direct parent, accounting ultimate parent, and issuer nodes.
+
+Parent selection is candidate-first. `parentStatus` is one of `verified`, `candidate`, `ambiguous`, `unknown`, or `not_applicable`; `parentAlternatives` retains ranked competing chains and `parentEvidence` explains the decision. SEC, OpenFIGI, GLEIF, and customer security-master relationships are supporting evidence and cannot verify a parent by themselves. A parent is `verified` only when every edge in its selected chain comes from a rule, override, or `customer_relationship_master`. Provider-only and brand-derived parents route the record to review while preserving the matched operating entity.
+
+Every relationship edge records `source`, `trustLevel`, and `selfReported`. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `ambiguous` and force review.
 
 Entity, security, and relationship periods are evaluated independently against `observationDate`. Missing dates remain `not_verified`; current provider records are not assumed to be historically valid.
 

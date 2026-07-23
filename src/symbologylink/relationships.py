@@ -8,6 +8,40 @@ from .providers import MatchProvider, ProviderCandidate
 from .validity import evaluate_periods
 
 
+AUTHORITATIVE_RELATIONSHIP_SOURCES = {"human_override", "customer_relationship_master"}
+
+
+def relationship_trust(source: str | None) -> str:
+    """Classify relationship evidence without treating provider data as approval."""
+    value = source or "unknown"
+    if value in AUTHORITATIVE_RELATIONSHIP_SOURCES or value.startswith("override:") or value.startswith("rule:"):
+        return "authoritative"
+    return "supporting"
+
+
+def _edge_source(edge: dict[str, Any], fallback: str = "unknown") -> str:
+    explicit = edge.get("source") or edge.get("provider")
+    if explicit:
+        return str(explicit)
+    providers = edge.get("providers") or []
+    return str(min(providers, key=_provider_rank)) if providers else fallback
+
+
+def annotate_relationship_edge(edge: dict[str, Any], fallback: str = "unknown") -> dict[str, Any]:
+    source = _edge_source(edge, fallback)
+    providers = list(dict.fromkeys(edge.get("providers") or [source]))
+    authoritative = [item for item in providers if relationship_trust(item) == "authoritative"]
+    if authoritative:
+        source = min(authoritative, key=_provider_rank)
+    return {
+        **edge,
+        "source": source,
+        "trustLevel": "authoritative" if authoritative or relationship_trust(source) == "authoritative" else "supporting",
+        "selfReported": bool(edge.get("selfReported") or edge.get("self_reported") or "gleif" in providers or source == "gleif"),
+        "providers": providers,
+    }
+
+
 def candidate_node(candidate: ProviderCandidate) -> dict[str, Any]:
     return {
         "entityId": candidate.entity_id,
@@ -30,7 +64,7 @@ def _provider_rank(provider: str) -> int:
         return 0
     if provider.startswith("rule:"):
         return 1
-    return {"customer_security_master": 2, "sec": 3, "gleif": 4, "openfigi": 5}.get(provider, 10)
+    return {"customer_relationship_master": 2, "customer_security_master": 3, "sec": 4, "gleif": 5, "openfigi": 6}.get(provider, 10)
 
 
 def _edge_level(relationship_type: str) -> str:
@@ -89,7 +123,7 @@ def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: 
         relationship_periods = list(relationship.get("periods") or [])
         evaluated = evaluate_periods("relationships", relationship_periods, observation_date) if relationship_periods else None
         provider = relationship.get("provider") or candidate.provider
-        edges.append({
+        edges.append(annotate_relationship_edge({
             "fromEntityId": relationship.get("fromEntityId") or relationship.get("from_entity_id") or candidate.entity_id,
             "toEntityId": str(parent_id),
             "relationshipType": relationship.get("relationshipType") or relationship.get("relationship_type") or "subsidiary_of",
@@ -101,7 +135,7 @@ def embedded_relationship_graph(candidate: ProviderCandidate, observation_date: 
             "validOnObservationDate": evaluated["validOnObservationDate"] if evaluated else valid_on_date(observation_date, valid_from, valid_to),
             "providers": [provider],
             "provenance": relationship.get("provenance") or [{"provider": provider, "sourceRecord": relationship.get("sourceRecord")}],
-        })
+        }, provider))
     source_ids = {edge["fromEntityId"] for edge in edges}
     terminal_nodes = [node for node in nodes if node["entityId"] not in source_ids and node["entityId"] != candidate.entity_id]
     complete = any(node.get("entityType") == "issuer" for node in terminal_nodes) or any(relationship.get("terminal") is True for relationship in relationships)
@@ -187,10 +221,12 @@ class RelationshipResolver:
                 source = aliases.get(str(raw.get("fromEntityId")), str(raw.get("fromEntityId")))
                 target = aliases.get(str(raw.get("toEntityId")), str(raw.get("toEntityId")))
                 relationship_type = raw.get("relationshipType") or "subsidiary_of"
-                providers = list(dict.fromkeys(raw.get("providers") or [graph_provider]))
+                providers = list(dict.fromkeys(raw.get("providers") or [raw.get("source") or raw.get("provider") or graph_provider]))
                 existing = next((item for item in edges if item["fromEntityId"] == source and item["toEntityId"] == target and item["relationshipType"] == relationship_type), None)
                 if existing:
                     existing["providers"] = list(dict.fromkeys([*existing["providers"], *providers]))
+                    annotated = annotate_relationship_edge(existing, graph_provider)
+                    existing.update({key: annotated[key] for key in ("source", "trustLevel", "selfReported", "providers")})
                     existing["provenance"].extend(item for item in (raw.get("provenance") or []) if item not in existing["provenance"])
                     for item in raw.get("periods") or []:
                         if item not in existing["periods"]:
@@ -199,7 +235,7 @@ class RelationshipResolver:
                         existing["validOnObservationDate"] = evaluate_periods("relationships", existing["periods"], observation_date)["validOnObservationDate"]
                     continue
                 valid_from, valid_to = raw.get("validFrom"), raw.get("validTo")
-                edges.append({
+                edges.append(annotate_relationship_edge({
                     "fromEntityId": source,
                     "toEntityId": target,
                     "relationshipType": relationship_type,
@@ -211,7 +247,7 @@ class RelationshipResolver:
                     "validOnObservationDate": raw.get("validOnObservationDate") if "validOnObservationDate" in raw else valid_on_date(observation_date, valid_from, valid_to),
                     "providers": providers,
                     "provenance": list(raw.get("provenance") or [{"provider": graph_provider}]),
-                })
+                }, graph_provider))
 
         conflicts: list[dict[str, Any]] = []
         chain_ids = [subject_id]
@@ -291,3 +327,94 @@ class RelationshipResolver:
             "conflicts": conflicts,
             "errors": errors,
         }
+
+
+def parent_resolution(graph: dict[str, Any], brand_origin: bool = False, max_depth: int = 8) -> dict[str, Any]:
+    """Rank parent proposals while keeping relationship traversal separate from verification."""
+    subject = graph.get("subject") or {}
+    subject_id = subject.get("entityId")
+    nodes = {node.get("entityId"): node for node in graph.get("nodes") or []}
+    eligible = [
+        annotate_relationship_edge(edge)
+        for edge in graph.get("edges") or []
+        if edge.get("validOnObservationDate") is not False
+        and (edge.get("status") != "INACTIVE" or edge.get("validOnObservationDate") is True)
+    ]
+    outgoing: dict[str, list[dict[str, Any]]] = {}
+    for edge in eligible:
+        if edge.get("level") == "direct":
+            outgoing.setdefault(str(edge.get("fromEntityId")), []).append(edge)
+
+    paths: list[list[dict[str, Any]]] = []
+
+    def walk(current: str, path: list[dict[str, Any]], visited: set[str]) -> None:
+        next_edges = outgoing.get(current, [])
+        if not next_edges or len(path) >= max_depth:
+            if path:
+                paths.append(path)
+            return
+        progressed = False
+        for edge in next_edges:
+            target = str(edge.get("toEntityId") or "")
+            if not target or target in visited:
+                continue
+            progressed = True
+            walk(target, [*path, edge], {*visited, target})
+        if path and not progressed:
+            paths.append(path)
+
+    if subject_id:
+        walk(str(subject_id), [], {str(subject_id)})
+
+    alternatives: list[dict[str, Any]] = []
+    for path in paths:
+        direct = nodes.get(path[0].get("toEntityId"), {"entityId": path[0].get("toEntityId")})
+        terminal = nodes.get(path[-1].get("toEntityId"), {"entityId": path[-1].get("toEntityId")})
+        sources = list(dict.fromkeys(edge.get("source") or "unknown" for edge in path))
+        authoritative = all(edge.get("trustLevel") == "authoritative" for edge in path)
+        proposal = {
+            **terminal,
+            "directParent": direct,
+            "chain": [subject_id, *(edge.get("toEntityId") for edge in path)],
+            "relationshipTypes": [edge.get("relationshipType") for edge in path],
+            "sources": sources,
+            "trustLevel": "authoritative" if authoritative else "supporting",
+            "selfReported": any(edge.get("selfReported") is True for edge in path),
+            "brandInference": brand_origin or any(_edge_family(edge.get("relationshipType") or "") == "brand" for edge in path),
+            "status": "verified" if authoritative else "candidate",
+        }
+        existing = next((item for item in alternatives if item.get("entityId") == proposal.get("entityId")), None)
+        if existing:
+            combined_sources = list(dict.fromkeys([*existing["sources"], *sources]))
+            if proposal["trustLevel"] == "authoritative":
+                proposal["sources"] = combined_sources
+                existing.update(proposal)
+            else:
+                existing["sources"] = combined_sources
+        else:
+            alternatives.append(proposal)
+
+    alternatives.sort(key=lambda item: (
+        0 if item["status"] == "verified" else 1,
+        min((_provider_rank(source) for source in item["sources"]), default=10),
+        str(item.get("entityId")),
+    ))
+    for rank, alternative in enumerate(alternatives, 1):
+        alternative["rank"] = rank
+
+    distinct = {item.get("entityId") for item in alternatives}
+    if len(distinct) > 1:
+        status = "ambiguous"
+    elif alternatives:
+        status = alternatives[0]["status"]
+    elif subject.get("entityType") == "issuer":
+        status = "not_applicable"
+    else:
+        status = "unknown"
+    authoritative_targets = [item.get("entityId") for item in alternatives if item["status"] == "verified"]
+    return {
+        "status": status,
+        "selectedParent": alternatives[0] if alternatives else None,
+        "alternatives": alternatives,
+        "authoritativeConflict": len(set(authoritative_targets)) > 1,
+    }
