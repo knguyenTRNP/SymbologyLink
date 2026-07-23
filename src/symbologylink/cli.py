@@ -20,9 +20,12 @@ from .engine import MatchEngine
 from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
 from .models import MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider
+from .result_schema import SCHEMA_VERSION, legacy_to_v2
 
 
 STRUCTURED_RESULT_FIELDS = {
+    "entity", "public_parent", "security", "temporal", "relationship_graph", "review_reasons",
+    "source_record", "source_metadata", "provider_versions",
     "alternatives", "evidence", "matchedEntity", "matchedSecurity",
     "securityAlternatives", "publicParent", "parentAlternatives", "parentEvidence", "relationshipGraph", "validity",
     "sourceRecord", "sourceMetadata", "providerVersions",
@@ -74,6 +77,36 @@ def _decode_structured_result(row: dict) -> dict:
             except json.JSONDecodeError:
                 pass
     return decoded
+
+
+def _read_result_rows(path: str | Path) -> list[dict]:
+    input_path = Path(path)
+    if input_path.suffix.lower() in {".parquet", ".pq"}:
+        values = read_records(input_path)
+    elif input_path.suffix.lower() == ".json":
+        values = json.loads(input_path.read_text(encoding="utf-8"))
+    else:
+        values = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if isinstance(values, dict):
+        values = [values]
+    return [_decode_structured_result(row) for row in values]
+
+
+def _write_result_rows(output: Path, rows: list[dict]) -> None:
+    with _atomic_output_path(output) as partial:
+        if output.suffix.lower() in {".parquet", ".pq"}:
+            try:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+            except ImportError as exc:
+                raise IngestionError("Parquet output requires: pip install 'symbologylink[parquet]'") from exc
+            pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(rows)), partial, compression="zstd")
+        elif output.suffix.lower() == ".json":
+            partial.write_text(json.dumps(rows, indent=2, default=str) + "\n", encoding="utf-8")
+        else:
+            with partial.open("w", encoding="utf-8", newline="") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row, separators=(",", ":"), default=str) + "\n")
 
 
 def _csv_safe_cell(value):
@@ -168,29 +201,26 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     else:
         decision_policies = DecisionPolicySet.load(args.decision_policies)
     engine = MatchEngine(providers, config, RuleSet.load(args.rules), OverrideStore(args.overrides) if args.overrides else None, decision_policies)
-    results = [result.to_dict() for result in engine.match_batch(input_records)]
+    legacy_output = bool(getattr(args, "legacy_output", False))
+    if legacy_output:
+        print("warning: --legacy-output is deprecated and will be removed in a later major release.", file=sys.stderr)
+    matched_results = engine.match_batch(input_records)
+    results = [result.to_legacy_dict() if legacy_output else result.to_dict() for result in matched_results]
     engine_version = package_version()
     provider_versions = {provider.name: str(getattr(provider, "version", engine_version)) for provider in providers}
     for result in results:
-        result["inputFileSha256"] = profile.sha256
-        result["engineVersion"] = engine_version
-        result["providerVersions"] = provider_versions
-        result["mappingContentSha256"] = mapping_hash
-    with _atomic_output_path(output) as partial:
-        if output.suffix.lower() in {".parquet", ".pq"}:
-            try:
-                import pyarrow as pa
-                import pyarrow.parquet as pq
-            except ImportError as exc:
-                raise IngestionError("Parquet output requires: pip install 'symbologylink[parquet]'") from exc
-            pq.write_table(pa.Table.from_pylist(_parquet_safe_rows(results)), partial, compression="zstd")
-        elif output.suffix.lower() == ".json":
-            partial.write_text(json.dumps(results, indent=2, default=str) + "\n", encoding="utf-8")
+        if legacy_output:
+            result["inputFileSha256"] = profile.sha256
+            result["engineVersion"] = engine_version
+            result["providerVersions"] = provider_versions
+            result["mappingContentSha256"] = mapping_hash
         else:
-            with partial.open("w", encoding="utf-8", newline="") as handle:
-                for result in results:
-                    handle.write(json.dumps(result, separators=(",", ":"), default=str) + "\n")
-    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "mappingContentSha256": mapping_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
+            result["input_file_sha256"] = profile.sha256
+            result["engine_version"] = engine_version
+            result["provider_versions"] = provider_versions
+            result["mapping_content_sha256"] = mapping_hash
+    _write_result_rows(output, results)
+    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "schemaVersion": "1.x-legacy" if legacy_output else SCHEMA_VERSION, "mappingContentSha256": mapping_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions}, indent=2))
     return 0
 
 
@@ -198,35 +228,62 @@ def cmd_export(args: argparse.Namespace) -> int:
     output_path = Path(args.output)
     if output_path.exists() and not getattr(args, "overwrite", False):
         raise IngestionError(f"Output already exists: {output_path}. Use --overwrite to replace it.")
-    input_path = Path(args.input)
-    if input_path.suffix.lower() in {".parquet", ".pq"}:
-        rows = [_decode_structured_result(row) for row in read_records(input_path)]
-    elif input_path.suffix.lower() == ".json":
-        rows = [_decode_structured_result(row) for row in json.loads(input_path.read_text(encoding="utf-8"))]
-    else:
-        rows = [_decode_structured_result(json.loads(line)) for line in input_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows = [row if str(row.get("schema_version") or "").startswith("2") else legacy_to_v2(row).to_dict() for row in _read_result_rows(args.input)]
     status_filter = getattr(args, "status", None)
     if status_filter:
         allowed_statuses = set(status_filter)
-        rows = [row for row in rows if row.get("status") in allowed_statuses]
-    source_fields = list(dict.fromkeys(key for row in rows for key in (row.get("sourceRecord") or {})))
-    enrichment_fields = ["record_id", "match_status", "matched_entity_id", "matched_entity_name", "match_score", "score_is_calibrated", "primary_pathway", "security_decision_status", "security_confidence", "security_match_score", "security_score_is_calibrated", "security_primary_pathway", "security_id", "security_alternative_count", "identifier_conflict_count", "identifier_conflict_types", "ticker", "exchange", "figi", "confidence", "parent_status", "parent_alternative_count", "selected_parent_id", "selected_parent_sources", "direct_parent_id", "ultimate_parent_id", "accounting_direct_parent_id", "accounting_ultimate_parent_id", "issuer_id", "entity_validity_status", "security_validity_status", "relationship_validity_status", "overall_validity_status", "valid_on_observation_date", "relationship_status", "mapping_version", "decision_source", "decision_version", "input_file_sha256", "engine_version", "source_metadata_json"]
+        if "matched" in allowed_statuses:
+            allowed_statuses.update({"entity_and_security_matched", "entity_matched_security_unknown", "private_entity"})
+        if "review_required" in allowed_statuses:
+            allowed_statuses.update({"ambiguous", "temporal_verification_required", "entity_matched_parent_candidate", "license_blocked"})
+        rows = [row for row in rows if row.get("final_decision") in allowed_statuses]
+    source_fields = list(dict.fromkeys(key for row in rows for key in (row.get("source_record") or {})))
+    enrichment_fields = [
+        "record_id", "entity_status", "entity_id", "entity_name", "entity_match_score", "entity_match_pathway",
+        "parent_status", "parent_id", "parent_name", "relationship_type", "relationship_source",
+        "security_status", "security_id", "ticker", "exchange", "figi", "share_class", "security_type",
+        "observation_date", "temporal_status", "temporal_reason", "final_decision", "review_reason",
+        "mapping_version", "schema_version",
+    ]
     fields = list(dict.fromkeys([*source_fields, *enrichment_fields]))
     with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         csv.writer(handle).writerow([_csv_safe_cell(field) for field in fields])
         for row in rows:
-            entity, security = row.get("matchedEntity") or {}, row.get("matchedSecurity") or {}
-            graph = row.get("relationshipGraph") or {}
-            parent = row.get("publicParent") or {}
-            validity = row.get("validity") or {}
-            conflict_types = [item.get("type") for item in row.get("evidence", []) if item.get("type") in {"identifier_conflict", "exact_name_identifier_conflict", "security_identifier_conflict"}]
-            enriched = {"record_id": row["recordId"], "match_status": row["status"], "matched_entity_id": entity.get("entityId"), "matched_entity_name": entity.get("canonicalName"), "match_score": row.get("matchScore"), "score_is_calibrated": row.get("scoreIsCalibrated"), "primary_pathway": row.get("primaryPathway"), "security_decision_status": row.get("securityDecisionStatus"), "security_confidence": row.get("securityConfidence"), "security_match_score": row.get("securityMatchScore"), "security_score_is_calibrated": row.get("securityScoreIsCalibrated"), "security_primary_pathway": row.get("securityPrimaryPathway"), "security_id": security.get("securityId"), "security_alternative_count": len(row.get("securityAlternatives") or []), "identifier_conflict_count": len(conflict_types), "identifier_conflict_types": "|".join(dict.fromkeys(conflict_types)), "ticker": security.get("ticker"), "exchange": security.get("exchange"), "figi": security.get("figi"), "confidence": row["confidence"], "parent_status": row.get("parentStatus"), "parent_alternative_count": len(row.get("parentAlternatives") or []), "selected_parent_id": parent.get("entityId"), "selected_parent_sources": "|".join(parent.get("sources") or []), "direct_parent_id": (graph.get("directParent") or {}).get("entityId"), "ultimate_parent_id": (graph.get("ultimateParent") or {}).get("entityId"), "accounting_direct_parent_id": (graph.get("accountingDirectParent") or {}).get("entityId"), "accounting_ultimate_parent_id": (graph.get("accountingUltimateParent") or {}).get("entityId"), "issuer_id": (graph.get("issuer") or {}).get("entityId"), "entity_validity_status": (validity.get("entity") or {}).get("status"), "security_validity_status": (validity.get("security") or {}).get("status"), "relationship_validity_status": (validity.get("relationships") or {}).get("status"), "overall_validity_status": (validity.get("overall") or {}).get("status"), "valid_on_observation_date": (validity.get("overall") or {}).get("validOnObservationDate"), "relationship_status": row.get("relationshipStatus"), "mapping_version": row["mappingVersion"], "decision_source": row.get("decisionSource"), "decision_version": row.get("decisionVersion"), "input_file_sha256": row.get("inputFileSha256"), "engine_version": row.get("engineVersion"), "source_metadata_json": _json_value(row.get("sourceMetadata") or {})}
+            entity, parent, security = row.get("entity") or {}, row.get("public_parent") or {}, row.get("security") or {}
+            security_attributes = security.get("attributes") or {}
+            parent_attributes = parent.get("attributes") or {}
+            temporal = (row.get("temporal") or {}).get("overall") or {}
+            enriched = {
+                "record_id": row.get("record_id"),
+                "entity_status": entity.get("status"), "entity_id": entity.get("canonical_id"), "entity_name": entity.get("canonical_name"),
+                "entity_match_score": entity.get("match_score"), "entity_match_pathway": entity.get("match_pathway"),
+                "parent_status": parent.get("status"), "parent_id": parent.get("canonical_id"), "parent_name": parent.get("canonical_name"),
+                "relationship_type": parent_attributes.get("relationship_type"), "relationship_source": parent_attributes.get("relationship_source"),
+                "security_status": security.get("status"), "security_id": security.get("canonical_id"),
+                "ticker": security_attributes.get("ticker"), "exchange": security_attributes.get("exchange"), "figi": security_attributes.get("figi"),
+                "share_class": security_attributes.get("share_class") or security_attributes.get("shareClass"),
+                "security_type": security_attributes.get("security_type") or security_attributes.get("securityType"),
+                "observation_date": row.get("observation_date"), "temporal_status": temporal.get("status"), "temporal_reason": temporal.get("reason"),
+                "final_decision": row.get("final_decision"), "review_reason": " | ".join(row.get("review_reasons") or []),
+                "mapping_version": row.get("mapping_version"), "schema_version": row.get("schema_version"),
+            }
             writer.writerow({
                 key: _csv_safe_cell(value)
-                for key, value in {**(row.get("sourceRecord") or {}), **enriched}.items()
+                for key, value in {**(row.get("source_record") or {}), **enriched}.items()
             })
     print(json.dumps({"status": "completed", "records": len(rows), "statuses": status_filter or "all", "output": str(output_path.resolve())}, indent=2))
+    return 0
+
+
+def cmd_migrate_results(args: argparse.Namespace) -> int:
+    output = Path(args.output)
+    if output.exists() and not getattr(args, "overwrite", False):
+        raise IngestionError(f"Output already exists: {output}. Use --overwrite to replace it.")
+    rows = _read_result_rows(args.input)
+    migrated = [legacy_to_v2(row, conservative_migration=True).to_dict() for row in rows]
+    _write_result_rows(output, migrated)
+    print(json.dumps({"status": "completed", "records": len(migrated), "schemaVersion": SCHEMA_VERSION, "output": str(output.resolve()), "historicalJobsModified": False}, indent=2))
     return 0
 
 
@@ -300,8 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("--input", required=True); preview.add_argument("--samples", type=int, default=5); preview.set_defaults(func=cmd_preview)
     validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.add_argument("--date-format"); validate.set_defaults(func=cmd_validate)
-    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway decision policy configuration"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
-    export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.add_argument("--status", action="append", choices=["matched", "review_required", "unmatched", "provider_error"]); export.add_argument("--overwrite", action="store_true"); export.set_defaults(func=cmd_export)
+    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway decision policy configuration"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--legacy-output", action="store_true", help="Deprecated: emit the pre-2.0 monolithic result schema"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
+    export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.add_argument("--status", action="append", choices=["entity_and_security_matched", "entity_matched_security_unknown", "entity_matched_parent_candidate", "private_entity", "review_required", "ambiguous", "unmatched", "temporal_verification_required", "provider_error", "license_blocked", "matched"]); export.add_argument("--overwrite", action="store_true"); export.set_defaults(func=cmd_export)
+    migrate = sub.add_parser("migrate"); migrate_sub = migrate.add_subparsers(dest="migrate_command", required=True); migrate_results = migrate_sub.add_parser("results", help="Migrate legacy result files to schema 2.0"); migrate_results.add_argument("--input", required=True); migrate_results.add_argument("--output", required=True); migrate_results.add_argument("--overwrite", action="store_true"); migrate_results.set_defaults(func=cmd_migrate_results)
     providers = sub.add_parser("providers"); provider_sub = providers.add_subparsers(required=True); provider_test = provider_sub.add_parser("test"); provider_test.add_argument("--reference"); provider_test.add_argument("--gleif", action="store_true"); provider_test.add_argument("--sec", action="store_true"); provider_test.add_argument("--sec-user-agent"); provider_test.add_argument("--openfigi", action="store_true"); provider_test.add_argument("--openfigi-api-key"); provider_test.add_argument("--cache", default=".symbologylink/cache.sqlite3"); provider_test.add_argument("--offline", action="store_true"); provider_test.set_defaults(func=cmd_provider_test)
     benchmark = sub.add_parser("benchmark"); benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
     benchmark_generate = benchmark_sub.add_parser("generate"); benchmark_generate.add_argument("--reference", required=True); benchmark_generate.add_argument("--output-dir", required=True); benchmark_generate.add_argument("--count", type=int, default=1000); benchmark_generate.add_argument("--seed", type=int, default=20260716); benchmark_generate.set_defaults(func=cmd_benchmark)

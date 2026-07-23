@@ -164,14 +164,30 @@ def _run_job(job_id: str) -> None:
             chunk = [_input(value) for value in records[start:start + 100]]
             job_store.update(job_id, status="scoring", stage="scoring", progress=5 + 90 * start / max(total, 1), rows_processed=len(results))
             results.extend(item.to_dict() for item in matcher.match_batch(chunk))
-        counts = Counter(result["status"] for result in results)
-        relationship_counts = Counter(item.get("relationshipStatus", "not_resolved") for item in results)
-        parent_counts = Counter(item.get("parentStatus", "unknown") for item in results)
-        temporal_counts = {scope: dict(Counter(((item.get("validity") or {}).get(scope) or {}).get("status", "not_available") for item in results)) for scope in ("entity", "security", "relationships", "overall")}
-        security_counts = Counter(item.get("securityDecisionStatus", "not_available") for item in results)
+        counts = Counter(result["final_decision"] for result in results)
+        entity_counts = Counter((item.get("entity") or {}).get("status", "unknown") for item in results)
+        parent_counts = Counter((item.get("public_parent") or {}).get("status", "unknown") for item in results)
+        security_counts = Counter((item.get("security") or {}).get("status", "unknown") for item in results)
+        relationship_counts = Counter(((item.get("public_parent") or {}).get("attributes") or {}).get("relationship_status", "not_resolved") for item in results)
+        temporal_counts = {scope: dict(Counter(((item.get("temporal") or {}).get(scope) or {}).get("status", "unknown") for item in results)) for scope in ("entity", "public_parent", "security", "overall")}
         conflict_types = {"identifier_conflict", "exact_name_identifier_conflict", "security_identifier_conflict"}
-        conflict_counts = Counter(evidence.get("type") for item in results for evidence in item.get("evidence", []) if evidence.get("type") in conflict_types)
-        metrics = {"totalRecords": total, "statusCounts": dict(counts), "averageConfidence": round(sum(item["confidence"] for item in results) / total, 4) if total else 0, "securityDecisionStatusCounts": dict(security_counts), "averageSecurityConfidence": round(sum(item.get("securityConfidence", 0) for item in results) / total, 4) if total else 0, "identifierConflictRecords": sum(any(evidence.get("type") in conflict_types for evidence in item.get("evidence", [])) for item in results), "identifierConflictCounts": dict(conflict_counts), "pointInTimeVerified": sum(item["pointInTimeStatus"] == "verified" for item in results), "temporalScopeStatusCounts": temporal_counts, "relationshipStatusCounts": dict(relationship_counts), "parentStatusCounts": dict(parent_counts), "parentReviewRecords": sum(item.get("parentStatus") in {"candidate", "ambiguous"} for item in results), "relationshipPointInTimeVerified": sum(((item.get("validity") or {}).get("relationships") or {}).get("status") == "verified" for item in results)}
+        component_evidence = lambda item: [evidence for name in ("entity", "public_parent", "security") for evidence in (item.get(name) or {}).get("evidence", [])]
+        conflict_counts = Counter(evidence.get("type") for item in results for evidence in component_evidence(item) if evidence.get("type") in conflict_types)
+        metrics = {
+            "totalRecords": total,
+            "schemaVersion": "2.0",
+            "finalDecisionCounts": dict(counts),
+            "entityStatusCounts": dict(entity_counts),
+            "parentStatusCounts": dict(parent_counts),
+            "securityStatusCounts": dict(security_counts),
+            "averageEntityMatchScore": round(sum((item.get("entity") or {}).get("match_score") or 0 for item in results) / total, 4) if total else 0,
+            "averageSecurityMatchScore": round(sum((item.get("security") or {}).get("match_score") or 0 for item in results) / total, 4) if total else 0,
+            "identifierConflictRecords": sum(any(evidence.get("type") in conflict_types for evidence in component_evidence(item)) for item in results),
+            "identifierConflictCounts": dict(conflict_counts),
+            "temporalScopeStatusCounts": temporal_counts,
+            "relationshipStatusCounts": dict(relationship_counts),
+            "parentReviewRecords": sum((item.get("public_parent") or {}).get("status") in {"candidate", "ambiguous"} for item in results),
+        }
         job_store.update(job_id, status="completed", stage="completed", progress=100, rows_processed=total, results_json=json.dumps(results, separators=(",", ":")), metrics_json=json.dumps(metrics, separators=(",", ":")))
     except Exception as exc:
         job_store.update(job_id, status="failed", stage="failed", error=str(exc))
