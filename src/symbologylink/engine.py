@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from difflib import SequenceMatcher
+from itertools import combinations
 
 from .decision_policies import DecisionPolicySet, derive_primary_pathway
 from .decisions import Decision, OverrideStore, RuleSet
@@ -15,7 +16,16 @@ from .normalize import (
     normalize_postal_code,
     normalize_subdivision,
 )
-from .providers import MatchProvider, ProviderCandidate, ProviderSecurityCandidate
+from .providers import (
+    MatchProvider,
+    ProviderCandidate,
+    ProviderSecurityCandidate,
+    TrustLevel,
+    provider_configuration_fingerprint,
+    provider_metadata_map,
+    source_rank,
+    source_trust_level,
+)
 from .relationships import RelationshipResolver, parent_resolution
 from .validity import combine_validity, evaluate_periods, not_applicable, period, relationship_validity
 
@@ -42,7 +52,29 @@ class MatchEngine:
         self.rules = rules or RuleSet()
         self.overrides = overrides
         self.decision_policies = decision_policies or DecisionPolicySet()
-        self.relationship_resolver = RelationshipResolver(providers)
+        self.provider_metadata = provider_metadata_map(providers)
+        self.relationship_resolver = RelationshipResolver(providers, self.provider_metadata)
+
+    def _source_has_capability(self, source: str | None, capability: str) -> bool:
+        value = source or "unknown"
+        if value == "human_override" or value.startswith("override:") or value.startswith("rule:"):
+            return True
+        return bool(((self.provider_metadata.get(value) or {}).get("capabilities") or {}).get(capability))
+
+    def _evaluate_provider_periods(self, scope: str, periods: list[dict], observation_date: str | None, fallback_provider: str) -> dict:
+        capability = f"{scope}_effective_dates"
+        eligible, rejected = [], []
+        for item in periods:
+            source = item.get("provider") or fallback_provider
+            (eligible if self._source_has_capability(source, capability) else rejected).append(item)
+        evaluation = evaluate_periods(scope, eligible, observation_date)
+        if rejected:
+            rejected_sources = sorted({str(item.get("provider") or fallback_provider) for item in rejected})
+            evaluation["capabilityRejectedProviders"] = rejected_sources
+            evaluation["rejectedPeriods"] = rejected
+            if observation_date and not eligible:
+                evaluation["reason"] = f"Provider date claims were rejected because {', '.join(rejected_sources)} does not declare {capability}."
+        return evaluation
 
     def _relationship_graph(self, record: EntityMatchInput, candidate: ProviderCandidate, evidence: list[MatchEvidence]) -> dict:
         graph = self.relationship_resolver.resolve(candidate, record.observationDate, self.config.relationship_max_depth)
@@ -77,7 +109,7 @@ class MatchEngine:
                 ",".join(selected.get("sources") or []) if selected else None,
                 detail="Provider relationship evidence proposed this parent but did not verify it.",
             ))
-        elif resolution["status"] == "ambiguous":
+        elif resolution["status"] in {"ambiguous", "contradicted"}:
             parent_evidence.append(MatchEvidence(
                 "parent_conflict", record.brandName or record.entityName or record.legalName,
                 [item.get("entityId") for item in resolution["alternatives"]], -100,
@@ -101,12 +133,11 @@ class MatchEngine:
         graph["parentResolution"] = {key: value for key, value in resolution.items() if key != "evidence"}
         return resolution
 
-    @staticmethod
-    def _candidate_validity(record: EntityMatchInput, candidate: ProviderCandidate) -> dict:
+    def _candidate_validity(self, record: EntityMatchInput, candidate: ProviderCandidate) -> dict:
         entity_periods = list(candidate.entity_periods)
         if not entity_periods and (candidate.valid_from or candidate.valid_to):
             entity_periods = [period("entity_existence", candidate.valid_from, candidate.valid_to, provider=candidate.provider, provenance="legacy_valid_from_valid_to")]
-        return evaluate_periods("entity", entity_periods, record.observationDate)
+        return self._evaluate_provider_periods("entity", entity_periods, record.observationDate, candidate.provider)
 
     def _add_validity_evidence(self, record: EntityMatchInput, candidate: ProviderCandidate, scope: str, evaluation: dict, evidence: list[MatchEvidence]) -> float:
         if not record.observationDate or evaluation["status"] == "not_applicable":
@@ -120,6 +151,13 @@ class MatchEngine:
             contribution = 0
         bounds = [{"validFrom": item.get("validFrom"), "validTo": item.get("validTo"), "periodType": item.get("periodType")} for item in evaluation["periods"]]
         evidence.append(MatchEvidence(f"{scope}_observation_date_validity", record.observationDate, bounds, contribution, candidate.provider, detail=f"{evaluation['status']}: {evaluation['reason']}"))
+        if evaluation.get("capabilityRejectedProviders"):
+            evidence.append(MatchEvidence(
+                "provider_capability_rejected", record.observationDate,
+                evaluation.get("rejectedPeriods"), 0,
+                ",".join(evaluation["capabilityRejectedProviders"]),
+                detail=f"{scope}_effective_dates is not declared by the provider.",
+            ))
         return contribution
 
     @staticmethod
@@ -128,6 +166,14 @@ class MatchEngine:
             return
         bounds = [{"fromEntityId": item.get("fromEntityId"), "toEntityId": item.get("toEntityId"), "validFrom": item.get("validFrom"), "validTo": item.get("validTo")} for item in evaluation["periods"]]
         evidence.append(MatchEvidence("relationship_observation_date_validity", record.observationDate, bounds, 0, "relationship_resolver", detail=f"{evaluation['status']}: {evaluation['reason']}"))
+        rejected = [item for item in evaluation.get("edgeEvaluations") or [] if item.get("capabilityRejectedProviders")]
+        if rejected:
+            providers = sorted({provider for item in rejected for provider in item.get("capabilityRejectedProviders") or []})
+            evidence.append(MatchEvidence(
+                "provider_capability_rejected", record.observationDate,
+                [item.get("rejectedPeriods") for item in rejected], 0,
+                ",".join(providers), detail="relationship_effective_dates is not declared by the provider.",
+            ))
 
     def _decision_result(self, record: EntityMatchInput, decision: Decision) -> EntityMatchResult:
         evidence_type = "human_override" if decision.source == "human_override" else "reusable_rule_match"
@@ -140,7 +186,7 @@ class MatchEngine:
         candidate = decision.candidate
         entity_validity = self._candidate_validity(record, candidate)
         security_candidates = MatchProvider._security_candidates(candidate)
-        security_validity = evaluate_periods("security", security_candidates[0].validity_periods, record.observationDate) if security_candidates else not_applicable("security", "The decision has no security to evaluate.")
+        security_validity = self._evaluate_provider_periods("security", security_candidates[0].validity_periods, record.observationDate, security_candidates[0].provider) if security_candidates else not_applicable("security", "The decision has no security to evaluate.")
         self._add_validity_evidence(record, candidate, "entity", entity_validity, evidence)
         entity = {"entityId": candidate.entity_id, "canonicalName": candidate.canonical_name, "entityType": candidate.entity_type}
         parent_evidence: list[MatchEvidence] = []
@@ -154,7 +200,7 @@ class MatchEngine:
         public_parent = parent.get("selectedParent")
         entity_status = self.decision_policies.decide(primary_pathway, 1.0)
         status = entity_status
-        if overall["validOnObservationDate"] is False or parent["status"] in {"candidate", "ambiguous"}:
+        if overall["validOnObservationDate"] is False or parent["status"] in {"candidate", "ambiguous", "contradicted"}:
             status = "review_required"
         security_match = self._score_security(record, security_candidates[0], candidate.entity_id) if security_candidates else None
         security_evidence = list(security_match.evidence) if security_match else []
@@ -248,10 +294,8 @@ class MatchEngine:
             confidence = min(confidence, .89)
         return CandidateMatch(candidate.entity_id, candidate.canonical_name, candidate.entity_type, round(confidence, 4), ",".join(sources), None, candidate.public_parent, evidence, entityValidity=entity_validity, securityValidity=not_applicable("security", "Security candidates are ranked independently."), primaryPathway=derive_primary_pathway(evidence))
 
-    @staticmethod
-    def _provider_rank(candidate: ProviderCandidate) -> int:
-        ranks = {"customer_security_master": 0, "sec": 1, "gleif": 2, "openfigi": 3}
-        return min((ranks.get(source, 10) for source in (candidate.sources or [candidate.provider])), default=10)
+    def _candidate_rank(self, candidate: ProviderCandidate | ProviderSecurityCandidate) -> int:
+        return min((source_rank(source, self.provider_metadata) for source in (candidate.sources or [candidate.provider])), default=10)
 
     @staticmethod
     def _should_merge(left: ProviderCandidate, right: ProviderCandidate) -> bool:
@@ -278,7 +322,7 @@ class MatchEngine:
         return False
 
     def _merge(self, left: ProviderCandidate, right: ProviderCandidate) -> ProviderCandidate:
-        winner, other = (left, right) if self._provider_rank(left) <= self._provider_rank(right) else (right, left)
+        winner, other = (left, right) if self._candidate_rank(left) <= self._candidate_rank(right) else (right, left)
         sources = list(dict.fromkeys([*(winner.sources or [winner.provider]), *(other.sources or [other.provider])]))
         identifiers = {**other.identifiers, **winner.identifiers}
         relationships = []
@@ -335,11 +379,6 @@ class MatchEngine:
         return reconciled
 
     @staticmethod
-    def _security_provider_rank(candidate: ProviderSecurityCandidate) -> int:
-        ranks = {"customer_security_master": 0, "openfigi": 1, "sec": 2}
-        return min((ranks.get(source, 10) for source in (candidate.sources or [candidate.provider])), default=10)
-
-    @staticmethod
     def _security_issuer_agrees(left: ProviderSecurityCandidate, right: ProviderSecurityCandidate) -> bool:
         if left.issuer_entity_id == right.issuer_entity_id:
             return True
@@ -364,7 +403,7 @@ class MatchEngine:
         return not left_exchange or not right_exchange or left_exchange == right_exchange or "US" in {left_exchange, right_exchange}
 
     def _merge_security(self, left: ProviderSecurityCandidate, right: ProviderSecurityCandidate) -> ProviderSecurityCandidate:
-        winner, other = (left, right) if self._security_provider_rank(left) <= self._security_provider_rank(right) else (right, left)
+        winner, other = (left, right) if self._candidate_rank(left) <= self._candidate_rank(right) else (right, left)
         periods = []
         for value in [*winner.validity_periods, *other.validity_periods]:
             if value not in periods:
@@ -442,11 +481,18 @@ class MatchEngine:
         if issuer_linked:
             raw += 20
             evidence.append(MatchEvidence("security_issuer_link", issuer_entity_id, selected_entity_id, 20, candidate.provider, detail="Security issuer matches the selected entity."))
-        validity = evaluate_periods("security", candidate.validity_periods, record.observationDate)
+        validity = self._evaluate_provider_periods("security", candidate.validity_periods, record.observationDate, candidate.provider)
         if record.observationDate and validity["status"] != "not_applicable":
             contribution = w["security_date_valid"] if validity["validOnObservationDate"] is True else w["security_date_invalid"] if validity["validOnObservationDate"] is False else 0
             raw += contribution
             evidence.append(MatchEvidence("security_observation_date_validity", record.observationDate, [{"validFrom": item.get("validFrom"), "validTo": item.get("validTo"), "periodType": item.get("periodType")} for item in validity["periods"]], contribution, candidate.provider, detail=f"{validity['status']}: {validity['reason']}"))
+        if validity.get("capabilityRejectedProviders"):
+            evidence.append(MatchEvidence(
+                "provider_capability_rejected", record.observationDate,
+                validity.get("rejectedPeriods"), 0,
+                ",".join(validity["capabilityRejectedProviders"]),
+                detail="security_effective_dates is not declared by the provider.",
+            ))
         confidence = _confidence_from_raw(raw)
         strong_exact = any(item.type == "security_identifier_match" and item.detail in {"figi", "isin", "cusip"} for item in evidence)
         conflict = any(item.scoreContribution < -50 for item in evidence)
@@ -458,6 +504,14 @@ class MatchEngine:
         elif ticker_exact and not exchange:
             confidence = min(confidence, .79)
         payload = {**candidate.security, **candidate.identifiers, "securityId": candidate.security_id, "issuerEntityId": issuer_entity_id, "canonicalName": candidate.canonical_name}
+        share_class_fields = {"share_class", "shareClass", "share_class_figi", "shareClassFIGI"}
+        unsupported_share_class = sorted(field for field in share_class_fields if payload.get(field))
+        if unsupported_share_class and not any(self._source_has_capability(source, "share_class_data") for source in sources):
+            rejected = {field: payload.pop(field) for field in unsupported_share_class}
+            evidence.append(MatchEvidence(
+                "provider_capability_rejected", rejected, None, 0,
+                ",".join(sources), detail="share_class_data is not declared by the provider.",
+            ))
         return SecurityCandidateMatch(candidate.security_id, issuer_entity_id, candidate.canonical_name, round(confidence, 4), ",".join(sources), dict(candidate.identifiers), payload, evidence, validity, primaryPathway=derive_primary_pathway(evidence))
 
     def _rank_securities(self, record: EntityMatchInput, candidates: list[ProviderSecurityCandidate], selected_entity_id: str | None, entities: list[ProviderCandidate]) -> list[SecurityCandidateMatch]:
@@ -563,9 +617,67 @@ class MatchEngine:
             ))
         return entity_evidence, security_evidence
 
+    def _authoritative_provider_conflicts(self, entities: list[ProviderCandidate], securities: list[ProviderSecurityCandidate]) -> tuple[list[MatchEvidence], list[MatchEvidence]]:
+        def authoritative(sources: list[str]) -> bool:
+            return any(source_trust_level(source, self.provider_metadata) == TrustLevel.AUTHORITATIVE.value for source in sources)
+
+        entity_conflicts = []
+        authoritative_entities = [item for item in entities if authoritative(item.sources or [item.provider])]
+        for left, right in combinations(authoritative_entities, 2):
+            shared_identifier = any(left.identifiers.get(field) and left.identifiers.get(field) == right.identifiers.get(field) for field in ("cik", "lei"))
+            same_name = normalize_name(left.canonical_name) == normalize_name(right.canonical_name)
+            conflicting_identifiers = {
+                field: [left.identifiers.get(field), right.identifiers.get(field)]
+                for field in ("cik", "lei")
+                if left.identifiers.get(field) and right.identifiers.get(field) and left.identifiers.get(field) != right.identifiers.get(field)
+            }
+            name_conflict = shared_identifier and not same_name
+            if (same_name and conflicting_identifiers) or name_conflict:
+                entity_conflicts.append({
+                    "providers": [left.provider, right.provider],
+                    "entityIds": [left.entity_id, right.entity_id],
+                    "conflictingIdentifiers": conflicting_identifiers,
+                    "canonicalNames": [left.canonical_name, right.canonical_name],
+                })
+
+        security_conflicts = []
+        authoritative_securities = [item for item in securities if authoritative(item.sources or [item.provider])]
+        for left, right in combinations(authoritative_securities, 2):
+            shared_identifier = any(left.identifiers.get(field) and left.identifiers.get(field) == right.identifiers.get(field) for field in ("figi", "isin", "cusip"))
+            same_listing = bool(
+                left.identifiers.get("ticker") and left.identifiers.get("ticker") == right.identifiers.get("ticker")
+                and left.identifiers.get("exchange") and left.identifiers.get("exchange") == right.identifiers.get("exchange")
+            )
+            conflicting_identifiers = {
+                field: [left.identifiers.get(field), right.identifiers.get(field)]
+                for field in ("figi", "isin", "cusip")
+                if left.identifiers.get(field) and right.identifiers.get(field) and left.identifiers.get(field) != right.identifiers.get(field)
+            }
+            issuer_conflict = not self._security_issuer_agrees(left, right)
+            if (same_listing and conflicting_identifiers) or (shared_identifier and issuer_conflict):
+                security_conflicts.append({
+                    "providers": [left.provider, right.provider],
+                    "securityIds": [left.security_id, right.security_id],
+                    "conflictingIdentifiers": conflicting_identifiers,
+                    "issuerEntityIds": [left.issuer_entity_id, right.issuer_entity_id],
+                })
+
+        entity_evidence = [MatchEvidence(
+            "authoritative_provider_conflict", entity_conflicts, None, -100,
+            "trust_resolver", detail="Authoritative entity providers disagree on identity data.",
+        )] if entity_conflicts else []
+        security_evidence = [MatchEvidence(
+            "authoritative_security_provider_conflict", security_conflicts, None, -100,
+            "trust_resolver", detail="Authoritative security providers disagree on listing data.",
+        )] if security_conflicts else []
+        return entity_evidence, security_evidence
+
     def _finalize(self, record: EntityMatchInput, candidate_values: list[ProviderCandidate], security_values: list[ProviderSecurityCandidate], provider_errors: list[str], probe_warnings: list[str] | None = None) -> EntityMatchResult:
+        authoritative_conflicts, authoritative_security_conflicts = self._authoritative_provider_conflicts(candidate_values, security_values)
         candidates = self._reconcile(candidate_values)
         conflict_evidence, security_conflict_evidence = self._identifier_conflicts(record, candidates, security_values)
+        conflict_evidence.extend(authoritative_conflicts)
+        security_conflict_evidence.extend(authoritative_security_conflicts)
         ranked = list(self._score(record, candidate) for candidate in candidates)
         preliminary_securities = self._rank_securities(record, security_values, None, candidates)
         if preliminary_securities:
@@ -645,7 +757,7 @@ class MatchEngine:
         if selected:
             validity = combine_validity(record.observationDate, best.entityValidity or evaluate_periods("entity", [], record.observationDate), security_scope, relationship_scope)
         status = entity_status
-        if entity_status != "unmatched" and parent["status"] in {"candidate", "ambiguous"}:
+        if entity_status != "unmatched" and parent["status"] in {"candidate", "ambiguous", "contradicted"}:
             status = "review_required"
         if entity_status != "unmatched" and has_security_query and security_status != "matched":
             status = "review_required"
@@ -726,6 +838,10 @@ class MatchEngine:
                 result.processingDurationMs = round(forced_durations[record.recordId], 4)
             result.sourceRecord = dict(record.sourceRecord)
             result.sourceMetadata = dict(record.metadata)
+            result.providerMetadata = self.provider_metadata
+            result.mappingFingerprintSha256 = provider_configuration_fingerprint(
+                self.config.mapping_version, None, self.provider_metadata,
+            )
         return [results[record.recordId] for record in records]
 
     def match(self, record: EntityMatchInput) -> EntityMatchResult:

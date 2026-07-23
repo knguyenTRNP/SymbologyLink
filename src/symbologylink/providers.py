@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,113 @@ from .normalize import (
     normalize_subdivision,
 )
 from .validity import period, validate_periods
+
+
+class TrustLevel(str, Enum):
+    EXPERIMENTAL = "experimental"
+    SUPPORTING = "supporting"
+    AUTHORITATIVE = "authoritative"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    """Claims a provider is allowed to make during resolution."""
+
+    entity_lookup: bool = False
+    security_lookup: bool = False
+    identifier_mapping: tuple[str, ...] = ()
+    lei: bool = False
+    current_entity_data: bool = False
+    current_security_data: bool = False
+    current_relationships: bool = False
+    entity_effective_dates: bool = False
+    security_effective_dates: bool = False
+    relationship_effective_dates: bool = False
+    share_class_data: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entity_lookup": self.entity_lookup,
+            "security_lookup": self.security_lookup,
+            "identifier_mapping": list(self.identifier_mapping),
+            "lei": self.lei,
+            "current_entity_data": self.current_entity_data,
+            "current_security_data": self.current_security_data,
+            "current_relationships": self.current_relationships,
+            "entity_effective_dates": self.entity_effective_dates,
+            "security_effective_dates": self.security_effective_dates,
+            "relationship_effective_dates": self.relationship_effective_dates,
+            "share_class_data": self.share_class_data,
+        }
+
+    def enabled(self) -> list[str]:
+        values = self.to_dict()
+        return [name for name, enabled in values.items() if enabled]
+
+    @classmethod
+    def from_customer_master_columns(cls, columns: set[str]) -> ProviderCapabilities:
+        identifiers = tuple(sorted(columns & {"cik", "lei", "ticker", "exchange", "figi", "isin", "cusip"}))
+        return cls(
+            entity_lookup=bool(columns & {"internal_entity_id", "canonical_name", "cik", "lei"}),
+            security_lookup=bool(columns & {"internal_security_id", "ticker", "figi", "isin", "cusip"}),
+            identifier_mapping=identifiers,
+            lei="lei" in columns,
+            current_entity_data=bool(columns & {"canonical_name", "entity_type", "domain", "country"}),
+            current_security_data=bool(columns & {"internal_security_id", "ticker", "exchange", "figi", "isin", "cusip"}),
+            current_relationships=bool(columns & {"parent_entity_id", "parent_name", "relationship_type"}),
+            entity_effective_dates=bool(columns & {"entity_valid_from", "entity_valid_to", "entity_periods", "valid_from", "valid_to"}),
+            security_effective_dates=bool(columns & {"security_valid_from", "security_valid_to", "security_periods", "listing_valid_from", "listing_valid_to"}),
+            relationship_effective_dates=bool(columns & {"relationship_valid_from", "relationship_valid_to", "relationship_periods"}),
+            share_class_data=bool(columns & {"share_class", "share_class_figi", "shareClassFIGI"}),
+        )
+
+
+def provider_metadata_map(providers: list[MatchProvider]) -> dict[str, dict[str, Any]]:
+    values: dict[str, dict[str, Any]] = {}
+    for provider in providers:
+        if hasattr(provider, "metadata"):
+            values[provider.name] = provider.metadata()
+            continue
+        capabilities = getattr(provider, "capabilities", ProviderCapabilities())
+        trust = getattr(provider, "trust_level", TrustLevel.EXPERIMENTAL)
+        trust_value = trust.value if isinstance(trust, TrustLevel) else str(trust)
+        values[provider.name] = {
+            "provider": provider.name,
+            "trust_level": trust_value,
+            "capabilities": capabilities.to_dict(),
+            "enabled_capabilities": capabilities.enabled(),
+        }
+    return values
+
+
+def provider_configuration_fingerprint(mapping_version: str, mapping_content_sha256: str | None, metadata: dict[str, dict[str, Any]]) -> str:
+    return hashlib.sha256(json.dumps({
+        "mappingVersion": mapping_version,
+        "mappingContentSha256": mapping_content_sha256,
+        "providers": metadata,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def source_trust_level(source: str | None, metadata: dict[str, dict[str, Any]] | None = None) -> str:
+    value = source or "unknown"
+    if value == "human_override" or value.startswith("override:") or value.startswith("rule:"):
+        return TrustLevel.AUTHORITATIVE.value
+    entry = (metadata or {}).get(value) or {}
+    trust = entry.get("trust_level") or entry.get("trustLevel") or TrustLevel.EXPERIMENTAL.value
+    return trust.value if isinstance(trust, TrustLevel) else str(trust)
+
+
+def source_rank(source: str | None, metadata: dict[str, dict[str, Any]] | None = None) -> int:
+    value = source or "unknown"
+    if value == "human_override" or value.startswith("override:"):
+        return 0
+    if value.startswith("rule:"):
+        return 1
+    return {
+        TrustLevel.AUTHORITATIVE.value: 2,
+        TrustLevel.SUPPORTING.value: 3,
+        TrustLevel.EXPERIMENTAL.value: 4,
+    }.get(source_trust_level(value, metadata), 5)
 
 
 def _period_values(value: Any, provider: str, source_record: int, source_file: str) -> list[dict[str, Any]]:
@@ -91,6 +199,8 @@ class ProviderSearchResult:
 
 class MatchProvider(ABC):
     name: str
+    capabilities = ProviderCapabilities()
+    trust_level = TrustLevel.EXPERIMENTAL
 
     @abstractmethod
     def search(self, input_record: EntityMatchInput, limit: int = 20) -> list[ProviderCandidate]: ...
@@ -150,8 +260,20 @@ class MatchProvider(ABC):
             ))
         return results
 
+    def metadata(self) -> dict[str, Any]:
+        trust = self.trust_level.value if isinstance(self.trust_level, TrustLevel) else str(self.trust_level)
+        return {
+            "provider": self.name,
+            "trust_level": trust,
+            "capabilities": self.capabilities.to_dict(),
+            "enabled_capabilities": self.capabilities.enabled(),
+        }
+
+    def has_capability(self, capability: str) -> bool:
+        return bool(getattr(self.capabilities, capability, False))
+
     def health_check(self) -> dict[str, Any]:
-        return {"provider": self.name, "status": "available"}
+        return {**self.metadata(), "status": "available"}
 
     def resolve_relationships(self, candidate: ProviderCandidate, observation_date: str | None = None, max_depth: int = 8) -> dict[str, Any] | None:
         """Return a provider-specific child-to-parent graph for a resolved candidate."""
@@ -180,16 +302,20 @@ class LocalSecurityMasterProvider(MatchProvider):
     """Customer CSV or Parquet security master."""
 
     name = "customer_security_master"
+    trust_level = TrustLevel.AUTHORITATIVE
 
     def __init__(self, path: str | Path, name: str | None = None):
         self.path = Path(path)
         if name:
             self.name = name
-        self.candidates = self._load()
+        source_rows = list(read_records(self.path))
+        columns = {str(column) for row in source_rows for column in row}
+        self.capabilities = ProviderCapabilities.from_customer_master_columns(columns)
+        self.candidates = self._load(source_rows)
 
-    def _load(self) -> list[ProviderCandidate]:
+    def _load(self, source_rows: list[dict[str, Any]]) -> list[ProviderCandidate]:
         rows: list[ProviderCandidate] = []
-        for index, row in enumerate(read_records(self.path), 1):
+        for index, row in enumerate(source_rows, 1):
             identifiers = {k: normalize_identifier(row.get(k), k) for k in ("ticker", "exchange", "cik", "lei", "figi", "isin", "cusip") if row.get(k)}
             entity_valid_from = str(row.get("entity_valid_from") or row.get("valid_from") or "") or None
             entity_valid_to = str(row.get("entity_valid_to") or row.get("valid_to") or "") or None
@@ -359,6 +485,15 @@ class GLEIFProvider(MatchProvider):
     """GLEIF JSON:API connector for LEIs, legal names, addresses, and aliases."""
 
     name = "gleif"
+    trust_level = TrustLevel.SUPPORTING
+    capabilities = ProviderCapabilities(
+        entity_lookup=True,
+        identifier_mapping=("lei",),
+        lei=True,
+        current_entity_data=True,
+        current_relationships=True,
+        relationship_effective_dates=True,
+    )
     base_url = "https://api.gleif.org/api/v1"
 
     def __init__(self, cache: SQLiteCache | None = None, timeout: float = 15, retries: int = 2, offline: bool = False, user_agent: str = "SymbologyLink/0.0.0"):
@@ -603,15 +738,21 @@ class GLEIFProvider(MatchProvider):
     def health_check(self) -> dict[str, Any]:
         try:
             self._request("/lei-records", {"page[size]": "1"}, "health")
-            return {"provider": self.name, "status": "available", "offline": self.offline}
+            return {**self.metadata(), "status": "available", "offline": self.offline}
         except ProviderError as exc:
-            return {"provider": self.name, "status": "unavailable", "offline": self.offline, "error": str(exc)}
+            return {**self.metadata(), "status": "unavailable", "offline": self.offline, "error": str(exc)}
 
 
 class SECProvider(MatchProvider):
     """SEC company index and submissions connector for US filers and issuers."""
 
     name = "sec"
+    trust_level = TrustLevel.SUPPORTING
+    capabilities = ProviderCapabilities(
+        entity_lookup=True,
+        identifier_mapping=("cik", "ticker"),
+        current_entity_data=True,
+    )
     index_url = "https://www.sec.gov/files/company_tickers_exchange.json"
     submissions_url = "https://data.sec.gov/submissions/CIK{cik}.json"
 
@@ -723,15 +864,22 @@ class SECProvider(MatchProvider):
     def health_check(self) -> dict[str, Any]:
         try:
             count = len(self._index())
-            return {"provider": self.name, "status": "available", "offline": self.offline, "indexedCompanies": count}
+            return {**self.metadata(), "status": "available", "offline": self.offline, "indexedCompanies": count}
         except ProviderError as exc:
-            return {"provider": self.name, "status": "unavailable", "offline": self.offline, "error": str(exc)}
+            return {**self.metadata(), "status": "unavailable", "offline": self.offline, "error": str(exc)}
 
 
 class OpenFIGIProvider(MatchProvider):
     """OpenFIGI v3 mapping/search connector with per-record caching and request batching."""
 
     name = "openfigi"
+    trust_level = TrustLevel.SUPPORTING
+    capabilities = ProviderCapabilities(
+        security_lookup=True,
+        identifier_mapping=("figi", "isin", "cusip", "ticker", "exchange"),
+        current_security_data=True,
+        share_class_data=True,
+    )
     base_url = "https://api.openfigi.com/v3"
     exchange_to_mic = {
         "XNAS": "XNAS", "XNYS": "XNYS", "ARCX": "ARCX", "XASE": "XASE",
@@ -866,6 +1014,6 @@ class OpenFIGIProvider(MatchProvider):
     def health_check(self) -> dict[str, Any]:
         try:
             payload = self._post("/mapping", [{"idType": "TICKER", "idValue": "IBM", "exchCode": "US"}], self._mapping_rate)
-            return {"provider": self.name, "status": "available", "authenticated": bool(self.api_key), "sampleResults": len(payload[0].get("data", [])) if payload else 0}
+            return {**self.metadata(), "status": "available", "authenticated": bool(self.api_key), "sampleResults": len(payload[0].get("data", [])) if payload else 0}
         except ProviderError as exc:
-            return {"provider": self.name, "status": "unavailable", "authenticated": bool(self.api_key), "error": str(exc)}
+            return {**self.metadata(), "status": "unavailable", "authenticated": bool(self.api_key), "error": str(exc)}

@@ -7,8 +7,9 @@ from .models import EntityMatchResult, MatchEvidence, MatchResultV2, ResolutionC
 
 
 SCHEMA_VERSION = "2.0"
-ENTITY_CONFLICT_TYPES = {"identifier_conflict", "exact_name_identifier_conflict"}
-SECURITY_CONFLICT_TYPES = {"security_identifier_conflict", "security_candidate_ambiguity"}
+ENTITY_CONFLICT_TYPES = {"identifier_conflict", "exact_name_identifier_conflict", "authoritative_provider_conflict"}
+SECURITY_CONFLICT_TYPES = {"security_identifier_conflict", "security_candidate_ambiguity", "authoritative_security_provider_conflict"}
+CONTRADICTION_TYPES = {"authoritative_provider_conflict", "authoritative_security_provider_conflict", "authoritative_parent_conflict"}
 PARENT_EVIDENCE_TYPES = {
     "parent_verified", "parent_candidate", "parent_conflict", "authoritative_parent_conflict",
     "relationship_resolution", "relationship_reporting_exception", "relationship_resolution_error",
@@ -38,6 +39,8 @@ def _evidence_objects(values: list[Any] | None) -> list[MatchEvidence]:
 
 
 def _component_status(status: str | None, evidence: list[dict[str, Any]], conflict_types: set[str]) -> str:
+    if any(item.get("type") in CONTRADICTION_TYPES for item in evidence):
+        return "contradicted"
     if status == "matched":
         return "verified"
     if status == "review_required":
@@ -217,6 +220,8 @@ def result_to_v2(result: EntityMatchResult) -> MatchResultV2:
         source_record=dict(result.sourceRecord),
         source_metadata=dict(result.sourceMetadata),
         processing_duration_ms=result.processingDurationMs,
+        provider_metadata=dict(result.providerMetadata),
+        mapping_fingerprint_sha256=result.mappingFingerprintSha256,
     )
 
 
@@ -356,7 +361,9 @@ def legacy_to_v2(row: dict[str, Any], *, conservative_migration: bool = True) ->
         input_file_sha256=row.get("inputFileSha256"),
         engine_version=row.get("engineVersion"),
         provider_versions=dict(row.get("providerVersions") or {}),
+        provider_metadata=dict(row.get("providerMetadata") or {}),
         mapping_content_sha256=row.get("mappingContentSha256"),
+        mapping_fingerprint_sha256=row.get("mappingFingerprintSha256"),
     )
     result.review_reasons = _review_reasons([entity, parent, security], result.final_decision)
     return result
@@ -447,7 +454,9 @@ def v2_to_legacy(row: MatchResultV2 | dict[str, Any]) -> dict[str, Any]:
         "inputFileSha256": value.get("input_file_sha256"),
         "engineVersion": value.get("engine_version"),
         "providerVersions": dict(value.get("provider_versions") or {}),
+        "providerMetadata": dict(value.get("provider_metadata") or {}),
         "mappingContentSha256": value.get("mapping_content_sha256"),
+        "mappingFingerprintSha256": value.get("mapping_fingerprint_sha256"),
         "matchScore": entity.get("match_score"),
         "scoreIsCalibrated": entity.get("score_is_calibrated", False),
         "primaryPathway": entity.get("match_pathway") or "unknown",

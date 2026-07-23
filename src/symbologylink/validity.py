@@ -99,7 +99,13 @@ def relationship_validity(graph: dict[str, Any] | None, observation_date: str | 
     flattened = []
     for edge in selected:
         values = edge.get("periods") or [edge]
-        evaluation = evaluate_periods("relationship_edge", values, observation_date)
+        if edge.get("effectiveDatesCapable"):
+            evaluation = evaluate_periods("relationship_edge", values, observation_date)
+        else:
+            evaluation = evaluate_periods("relationship_edge", [], observation_date)
+            evaluation["capabilityRejectedProviders"] = list(edge.get("providers") or [])
+            evaluation["rejectedPeriods"] = values
+            evaluation["reason"] = "Relationship dates were rejected because their providers do not declare relationship_effective_dates."
         edge_evaluations.append({"fromEntityId": edge.get("fromEntityId"), "toEntityId": edge.get("toEntityId"), "relationshipType": edge.get("relationshipType"), **evaluation})
         flattened.extend({**item, "fromEntityId": edge.get("fromEntityId"), "toEntityId": edge.get("toEntityId"), "relationshipType": edge.get("relationshipType")} for item in evaluation["periods"])
     values = [item["validOnObservationDate"] for item in edge_evaluations]

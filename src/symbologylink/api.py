@@ -381,7 +381,7 @@ def cancel_job(job_id: str) -> dict[str, Any]:
 
 @app.get("/v1/providers")
 def list_providers() -> list[dict[str, Any]]:
-    return [{"name": item.name, "configured": True} for item in providers()]
+    return [{**item.metadata(), "name": item.name, "configured": True} for item in providers()]
 
 
 @app.post("/v1/providers/test")
