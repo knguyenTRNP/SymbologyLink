@@ -312,6 +312,13 @@ class LocalSecurityMasterProvider(MatchProvider):
         columns = {str(column) for row in source_rows for column in row}
         self.capabilities = ProviderCapabilities.from_customer_master_columns(columns)
         self.candidates = self._load(source_rows)
+        try:
+            self._build_indexes()
+        except MemoryError as exc:
+            raise ProviderError(
+                "The customer security master could not be indexed in available memory. "
+                "Use a smaller master or run SymbologyLink with more memory."
+            ) from exc
 
     def _load(self, source_rows: list[dict[str, Any]]) -> list[ProviderCandidate]:
         rows: list[ProviderCandidate] = []
@@ -377,6 +384,50 @@ class LocalSecurityMasterProvider(MatchProvider):
         return rows
 
     @staticmethod
+    def _append_index(
+        index: dict[str, list[ProviderCandidate]],
+        key: str | None,
+        candidate: ProviderCandidate,
+    ) -> None:
+        if not key:
+            return
+        bucket = index.setdefault(key, [])
+        # A canonical name and alias can normalize to the same key. Keep a row
+        # only once in each bucket while retaining source-file order.
+        if not bucket or bucket[-1] is not candidate:
+            bucket.append(candidate)
+
+    def _build_indexes(self) -> None:
+        """Build immutable blocking indexes once after loading the master."""
+        self._by_identifier: dict[str, list[ProviderCandidate]] = {}
+        self._by_domain: dict[str, list[ProviderCandidate]] = {}
+        self._by_exact_name: dict[str, list[ProviderCandidate]] = {}
+        self._by_token: dict[str, list[ProviderCandidate]] = {}
+        self._by_entity_id: dict[str, ProviderCandidate] = {}
+        self._normalized_names: dict[str, list[str]] = {}
+        self._candidate_order: dict[int, int] = {}
+
+        for load_order, candidate in enumerate(self.candidates):
+            self._candidate_order[id(candidate)] = load_order
+            self._by_entity_id[candidate.entity_id] = candidate
+            for identifier in candidate.identifiers.values():
+                self._append_index(self._by_identifier, identifier, candidate)
+            self._append_index(self._by_domain, candidate.domain, candidate)
+
+            normalized_names = [
+                normalized
+                for value in (candidate.canonical_name, *candidate.aliases)
+                if (normalized := normalize_name(value))
+            ]
+            entity_names = self._normalized_names.setdefault(candidate.entity_id, [])
+            for normalized in normalized_names:
+                if normalized not in entity_names:
+                    entity_names.append(normalized)
+                self._append_index(self._by_exact_name, normalized, candidate)
+                for token in normalized.split():
+                    self._append_index(self._by_token, token, candidate)
+
+    @staticmethod
     def _validate(rows: list[ProviderCandidate]) -> None:
         entity_ids: dict[str, tuple[Any, ...]] = {}
         entity_only_rows: set[str] = set()
@@ -414,7 +465,8 @@ class LocalSecurityMasterProvider(MatchProvider):
                 if key:
                     identifiers[key] = row.entity_id
 
-    def search(self, input_record: EntityMatchInput, limit: int = 20) -> list[ProviderCandidate]:
+    def _search_scan(self, input_record: EntityMatchInput, limit: int = 20) -> list[ProviderCandidate]:
+        """Legacy linear search retained as an equivalence oracle for tests."""
         needles = {normalize_identifier(getattr(input_record, field), field) for field in ("ticker", "cik", "lei", "figi", "isin", "cusip") if getattr(input_record, field)}
         name = normalize_name(input_record.entityName or input_record.legalName or input_record.brandName)
         domain = normalize_domain(input_record.domain)
@@ -427,17 +479,67 @@ class LocalSecurityMasterProvider(MatchProvider):
                 ranked.append((priority, candidate))
         return [item[1] for item in sorted(ranked, key=lambda item: item[0])[:limit]]
 
+    def search(self, input_record: EntityMatchInput, limit: int = 20) -> list[ProviderCandidate]:
+        needles = {
+            normalize_identifier(getattr(input_record, field), field)
+            for field in ("ticker", "cik", "lei", "figi", "isin", "cusip")
+            if getattr(input_record, field)
+        }
+        name = normalize_name(input_record.entityName or input_record.legalName or input_record.brandName)
+        domain = normalize_domain(input_record.domain)
+        # Key by load order rather than entity ID because one issuer can have
+        # several security rows, all of which must remain available downstream.
+        hits: dict[int, tuple[int, int, ProviderCandidate]] = {}
+
+        def add(candidate: ProviderCandidate, priority: int, weak_rank: int = 0) -> None:
+            order = self._candidate_order[id(candidate)]
+            proposed = (priority, weak_rank, candidate)
+            existing = hits.get(order)
+            if existing is None or proposed[:2] < existing[:2]:
+                hits[order] = proposed
+
+        for needle in needles:
+            for candidate in self._by_identifier.get(needle, ())[:limit]:
+                add(candidate, 0)
+        if domain:
+            for candidate in self._by_domain.get(domain, ())[:limit]:
+                add(candidate, 1)
+        if name:
+            for candidate in self._by_exact_name.get(name, ())[:limit]:
+                add(candidate, 2)
+
+            tokens = name.split()
+            # Preserve every candidate admitted by the legacy first-token
+            # blocker before adding the broader non-first-token superset.
+            for candidate in self._by_token.get(tokens[0], ())[:limit]:
+                add(candidate, 3)
+            has_primary_hit = any(priority < 3 for priority, _, _ in hits.values())
+            if not has_primary_hit:
+                for token in tokens[1:]:
+                    for candidate in self._by_token.get(token, ())[:limit]:
+                        add(candidate, 3, 1)
+
+        ranked = sorted(
+            ((priority, weak_rank, order, candidate) for order, (priority, weak_rank, candidate) in hits.items()),
+            key=lambda item: item[:3],
+        )
+        return [item[3] for item in ranked[:limit]]
+
     def resolve_relationships(self, candidate: ProviderCandidate, observation_date: str | None = None, max_depth: int = 8) -> dict[str, Any] | None:
         from .relationships import candidate_node, valid_on_date
         from .validity import evaluate_periods
 
-        by_id = {item.entity_id: item for item in self.candidates}
-        current = by_id.get(candidate.entity_id)
+        current = self._by_entity_id.get(candidate.entity_id)
         if not current:
-            for item in self.candidates:
-                if any(value and value == item.identifiers.get(key) for key, value in candidate.identifiers.items() if key in {"lei", "cik"}):
-                    current = item
-                    break
+            fallback_matches: dict[int, ProviderCandidate] = {}
+            for key, value in candidate.identifiers.items():
+                if key not in {"lei", "cik"} or not value:
+                    continue
+                for item in self._by_identifier.get(value, ()):
+                    if item.identifiers.get(key) == value:
+                        fallback_matches[self._candidate_order[id(item)]] = item
+            if fallback_matches:
+                current = fallback_matches[min(fallback_matches)]
         if not current:
             return None
         subject = candidate_node(current)
@@ -449,7 +551,7 @@ class LocalSecurityMasterProvider(MatchProvider):
                 break
             relationship = current.relationships[0]
             parent_id = relationship.get("toEntityId")
-            parent = by_id.get(parent_id)
+            parent = self._by_entity_id.get(parent_id)
             parent_node = candidate_node(parent) if parent else relationship.get("toEntity") or {"entityId": parent_id, "canonicalName": relationship.get("parentName") or parent_id, "entityType": "legal_entity", "identifiers": {}, "providers": [self.name]}
             if parent_node not in nodes:
                 nodes.append(parent_node)
