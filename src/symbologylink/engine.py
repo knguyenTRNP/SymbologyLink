@@ -95,17 +95,24 @@ class MatchEngine:
         )
         parent_evidence: list[MatchEvidence] = []
         selected = resolution.get("selectedParent")
+        selected_claim = ({
+            "entityId": selected.get("entityId"),
+            "sources": selected.get("sources") or [],
+            "trustLevel": selected.get("trustLevel"),
+            "relationshipTypes": selected.get("relationshipTypes") or [],
+            "relationshipPeriods": selected.get("relationshipPeriods") or [],
+        } if selected else None)
         if resolution["status"] == "verified":
             parent_evidence.append(MatchEvidence(
                 "parent_verified", record.brandName or record.entityName or record.legalName,
-                selected.get("entityId") if selected else None, 0,
+                selected_claim, 0,
                 ",".join(selected.get("sources") or []) if selected else None,
                 detail="The parent chain is supported entirely by customer-approved relationship evidence.",
             ))
         elif resolution["status"] == "candidate":
             parent_evidence.append(MatchEvidence(
                 "parent_candidate", record.brandName or record.entityName or record.legalName,
-                selected.get("entityId") if selected else None, 0,
+                selected_claim, 0,
                 ",".join(selected.get("sources") or []) if selected else None,
                 detail="Provider relationship evidence proposed this parent but did not verify it.",
             ))
