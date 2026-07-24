@@ -26,6 +26,7 @@ from .ingest import IngestionError, prepare_records, profile_file, suggest_mappi
 from .jobs import JobStore
 from .models import EntityMatchInput, MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, MatchProvider, OpenFIGIProvider, SECProvider
+from .relationship_master import CustomerRelationshipMasterProvider
 
 INPUT_FIELDS = {item.name for item in fields(EntityMatchInput)}
 
@@ -41,6 +42,10 @@ def _input(value: dict[str, Any]) -> EntityMatchInput:
 class Settings:
     def __init__(self):
         self.reference = os.getenv("SYMBOLOGYLINK_REFERENCE")
+        self.relationship_master = os.getenv("SYMBOLOGYLINK_RELATIONSHIP_MASTER")
+        self.relationship_mapping = os.getenv("SYMBOLOGYLINK_RELATIONSHIP_MAPPING")
+        self.relationship_config = os.getenv("SYMBOLOGYLINK_RELATIONSHIP_CONFIG")
+        self.relationship_trust_level = os.getenv("SYMBOLOGYLINK_RELATIONSHIP_TRUST_LEVEL", "authoritative")
         self.rules = os.getenv("SYMBOLOGYLINK_RULES", ".symbologylink/rules.json")
         self.decision_policies = os.getenv("SYMBOLOGYLINK_DECISION_POLICIES")
         self.overrides = os.getenv("SYMBOLOGYLINK_OVERRIDES", ".symbologylink/overrides.jsonl")
@@ -91,6 +96,19 @@ def providers() -> list[MatchProvider]:
     values: list[MatchProvider] = []
     if settings.reference:
         values.append(LocalSecurityMasterProvider(settings.reference))
+    if settings.relationship_config or settings.relationship_master:
+        entity_ids = {
+            candidate.entity_id
+            for provider in values if isinstance(provider, LocalSecurityMasterProvider)
+            for candidate in provider.candidates
+        }
+        if settings.relationship_config:
+            values.append(CustomerRelationshipMasterProvider.from_config(settings.relationship_config, entity_ids=entity_ids or None))
+        else:
+            values.append(CustomerRelationshipMasterProvider(
+                settings.relationship_master, settings.relationship_mapping,
+                trust_level=settings.relationship_trust_level, entity_ids=entity_ids or None,
+            ))
     if settings.enable_openfigi:
         values.append(OpenFIGIProvider(settings.openfigi_api_key, cache=cache, offline=settings.offline, enable_name_search=settings.openfigi_name_search))
     if settings.enable_sec:

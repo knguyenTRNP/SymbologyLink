@@ -6,6 +6,7 @@ Symbology Link is a local-first entity and security resolution engine. It links 
 
 - CSV, TSV, JSON, JSON Lines, and Parquet input
 - Customer security masters in CSV or Parquet
+- Customer relationship masters with mapped CSV or Parquet columns
 - SEC, OpenFIGI, and GLEIF connectors
 - Independent entity and security candidate ranking
 - Brand, subsidiary, parent, and issuer relationship resolution
@@ -123,18 +124,77 @@ Aliases are pipe-delimited in CSV. Multiple validity intervals use native arrays
 
 Invalid periods, conflicting entity attributes, duplicate security identifiers, and missing canonical names fail validation before matching.
 
+Relationship columns embedded in a security master remain backward-compatible candidate evidence. Use the dedicated customer relationship master when a parent relationship should be eligible for verification.
+
+## Customer relationship master
+
+The dedicated `customer_relationship_master` provider is the trusted source for subsidiary, ownership, brand, division, operating, ultimate-parent, minority, and former-ownership relationships. Its canonical fields are:
+
+- `relationship_id`
+- `child_entity_id`
+- `parent_entity_id`
+- `relationship_type`
+- `valid_from`, `valid_to`
+- `ownership_percentage`
+- `source`, `source_record_id`
+- `trust_level`
+- `is_direct`
+
+Supported relationship types are `subsidiary_of`, `owned_by`, `brand_of`, `division_of`, `operated_by`, `ultimate_parent_of`, `minority_owned_by`, and `formerly_owned_by`.
+
+Customer column names can be mapped without code changes:
+
+```json
+{
+  "relationship_master": {
+    "path": "data/relationships.parquet",
+    "columns": {
+      "relationship_id": "relationship_key",
+      "child_entity_id": "subsidiary_id",
+      "parent_entity_id": "owner_id",
+      "relationship_type": "relation_type",
+      "valid_from": "start_date",
+      "valid_to": "end_date",
+      "ownership_percentage": "ownership_pct"
+    },
+    "trust_level": "authoritative"
+  }
+}
+```
+
+Validate the entire file before resolution. Errors are aggregated with row numbers instead of stopping at the first bad row:
+
+```console
+symbologylink relationships validate \
+  --input data/relationships.parquet \
+  --mapping relationship-config.json \
+  --entity-master security-master.csv
+```
+
+Validation detects missing and self-referential IDs, duplicate IDs and active records, parent cycles, overlapping mutually-exclusive parent periods, invalid date ranges, ownership outside 0–100%, and invalid minority-control claims. References absent from the configured entity master are returned as warnings and included in provider provenance.
+
+Inspect an entity at a specific observation date:
+
+```console
+symbologylink relationships inspect \
+  --input examples/relationships.csv \
+  --entity-id entity:wholefoods \
+  --date 2018-01-01
+```
+
 ## Providers
 
 | Provider | Trust | Declared capabilities |
 |---|---|---|
-| Customer security master | Authoritative | Derived from its columns: entity/security lookup, identifier mapping, share class, relationships, and the effective-date scopes actually present |
+| Customer security master | Authoritative for entity/security data | Derived from its columns; embedded relationships remain supporting candidates |
+| Customer relationship master | Authoritative | Customer-approved relationships and relationship effective dates |
 | SEC | Supporting | Entity lookup, CIK/ticker mapping, and current entity data |
 | OpenFIGI | Supporting | Security lookup, identifier mapping, current security data, and share-class data; no historical dates |
 | GLEIF | Supporting | Entity/LEI lookup, current self-reported relationships, and relationship effective dates |
 
 Providers declare a `ProviderCapabilities` object and `trust_level`. Undeclared capabilities default to empty with `experimental` trust, which prevents a third-party connector from gaining verification authority merely by returning a field. Human overrides remain highest precedence, followed by rules, authoritative providers, supporting providers, and experimental providers.
 
-Capability checks are enforced during decisioning. Temporal verification requires the matching `entity_effective_dates`, `security_effective_dates`, or `relationship_effective_dates` capability. Share-class fields require `share_class_data`. Parent verification requires authoritative relationship evidence. Unsupported claims are preserved as `provider_capability_rejected` evidence but cannot verify the affected field or period. Supporting data can corroborate authoritative values but cannot overwrite them; conflicting authoritative sources produce a `contradicted` component and require review.
+Capability checks are enforced during decisioning. Temporal verification requires the matching `entity_effective_dates`, `security_effective_dates`, or `relationship_effective_dates` capability. Share-class fields require `share_class_data`. Parent verification requires the dedicated customer relationship master, a rule, or an override. Unsupported claims are preserved as `provider_capability_rejected` evidence but cannot verify the affected field or period. Supporting data can corroborate authoritative values but cannot overwrite them; conflicting authoritative sources produce a `contradicted` component and require review.
 
 Example provider configuration:
 
@@ -143,7 +203,8 @@ symbologylink resolve \
   --input records.csv \
   --mapping mapping.json \
   --reference security-master.csv \
-  --providers customer_security_master,openfigi,sec,gleif \
+  --providers customer_security_master,customer_relationship_master,openfigi,sec,gleif \
+  --relationship-config relationship-config.json \
   --sec-user-agent "Example Organization contact@example.com" \
   --output results.jsonl
 ```
@@ -229,11 +290,13 @@ Conflict evidence types are:
 
 Relationship graphs distinguish operational chains from GLEIF accounting-consolidation relationships. Results may include direct parent, ultimate parent, accounting direct parent, accounting ultimate parent, and issuer nodes.
 
-Parent selection is candidate-first. `public_parent.status` records the outcome, `public_parent.alternatives` retains ranked competing chains, and `public_parent.evidence` explains the decision. A customer security master is authoritative for relationship columns it actually supplies; GLEIF and other supporting connectors can propose and corroborate parents but cannot verify them. Every selected edge must be authoritative for the parent to be `verified`. Brand-origin records remain review-only under the default decision policy even when an authoritative relationship verifies their parent.
+Parent selection is candidate-first. `public_parent.status` records the outcome, `public_parent.alternatives` retains ranked competing chains, and `public_parent.evidence` explains the decision. The customer relationship master, rules, and overrides can verify a parent. Security-master relationships, GLEIF, and other supporting connectors can propose and corroborate parents but cannot verify them. Every selected edge must be authoritative for the parent to be `verified`. Brand-origin records remain review-only under the default decision policy even when an authoritative relationship verifies their parent.
 
 Every relationship edge records `source`, `trustLevel`, `selfReported`, and whether effective dates are within provider capability. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `contradicted` and force review.
 
 Entity, security, and relationship periods are evaluated independently against `observationDate`. Missing dates remain `not_verified`; current provider records are not assumed to be historically valid.
+
+For API deployment, configure `SYMBOLOGYLINK_RELATIONSHIP_MASTER` plus optional `SYMBOLOGYLINK_RELATIONSHIP_MAPPING`, or set `SYMBOLOGYLINK_RELATIONSHIP_CONFIG` to a JSON/YAML configuration block. `SYMBOLOGYLINK_RELATIONSHIP_TRUST_LEVEL` defaults to `authoritative`.
 
 ## Rules and overrides
 

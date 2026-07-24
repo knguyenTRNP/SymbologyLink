@@ -10,7 +10,13 @@ from .validity import evaluate_periods
 
 def relationship_trust(source: str | None, provider_metadata: dict[str, dict[str, Any]] | None = None) -> str:
     """Classify relationship evidence without treating provider data as approval."""
-    return source_trust_level(source, provider_metadata)
+    value = source or "unknown"
+    if value == "human_override" or value.startswith("override:") or value.startswith("rule:"):
+        return "authoritative"
+    if value == "customer_relationship_master":
+        return source_trust_level(value, provider_metadata)
+    declared = source_trust_level(value, provider_metadata)
+    return "supporting" if declared == "authoritative" else declared
 
 
 def _edge_source(edge: dict[str, Any], fallback: str = "unknown", provider_metadata: dict[str, dict[str, Any]] | None = None) -> str:
@@ -33,10 +39,14 @@ def annotate_relationship_edge(edge: dict[str, Any], fallback: str = "unknown", 
         for item in providers
     )
     valid_on_date_value = edge.get("validOnObservationDate") if date_capable else None
+    declared_trust = relationship_trust(source, provider_metadata)
+    explicit_trust = str(edge.get("trustLevel") or declared_trust)
+    trust_rank = {"authoritative": 0, "supporting": 1, "experimental": 2}
+    effective_trust = max((declared_trust, explicit_trust), key=lambda value: trust_rank.get(value, 3))
     return {
         **edge,
         "source": source,
-        "trustLevel": relationship_trust(source, provider_metadata),
+        "trustLevel": effective_trust,
         "selfReported": bool(edge.get("selfReported") or edge.get("self_reported") or "gleif" in providers or source == "gleif"),
         "effectiveDatesCapable": date_capable,
         "validOnObservationDate": valid_on_date_value,
@@ -373,6 +383,12 @@ def parent_resolution(graph: dict[str, Any], brand_origin: bool = False, max_dep
             "directParent": direct,
             "chain": [subject_id, *(edge.get("toEntityId") for edge in path)],
             "relationshipTypes": [edge.get("relationshipType") for edge in path],
+            "relationshipPeriods": [{
+                "relationshipType": edge.get("relationshipType"),
+                "validFrom": edge.get("validFrom"), "validTo": edge.get("validTo"),
+                "source": edge.get("source"), "trustLevel": edge.get("trustLevel"),
+                "relationshipId": edge.get("relationshipId"),
+            } for edge in path],
             "sources": sources,
             "trustLevel": "authoritative" if authoritative else "supporting",
             "selfReported": any(edge.get("selfReported") is True for edge in path),

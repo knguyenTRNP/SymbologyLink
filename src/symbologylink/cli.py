@@ -20,6 +20,7 @@ from .engine import MatchEngine
 from .ingest import IngestionError, prepare_records, profile_file, read_records, suggest_mapping
 from .models import MatchConfig
 from .providers import GLEIFProvider, LocalSecurityMasterProvider, OpenFIGIProvider, SECProvider, provider_configuration_fingerprint
+from .relationship_master import CustomerRelationshipMasterProvider, validate_relationship_file
 from .result_schema import SCHEMA_VERSION, legacy_to_v2
 
 
@@ -175,6 +176,21 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         if not args.reference:
             raise IngestionError("--reference is required when using the customer security master provider.")
         providers.append(LocalSecurityMasterProvider(args.reference))
+    if "customer_relationship_master" in provider_names or "relationships" in provider_names:
+        entity_ids = {
+            candidate.entity_id
+            for provider in providers if isinstance(provider, LocalSecurityMasterProvider)
+            for candidate in provider.candidates
+        }
+        if args.relationship_config:
+            providers.append(CustomerRelationshipMasterProvider.from_config(args.relationship_config, entity_ids=entity_ids or None))
+        else:
+            if not args.relationship_master:
+                raise IngestionError("--relationship-master or --relationship-config is required when using customer_relationship_master.")
+            providers.append(CustomerRelationshipMasterProvider(
+                args.relationship_master, args.relationship_mapping,
+                trust_level=args.relationship_trust_level, entity_ids=entity_ids or None,
+            ))
     if "gleif" in provider_names:
         providers.append(GLEIFProvider(cache=cache, offline=args.offline))
     if "sec" in provider_names:
@@ -302,6 +318,18 @@ def cmd_provider_test(args: argparse.Namespace) -> int:
     providers = []
     if args.reference:
         providers.append(LocalSecurityMasterProvider(args.reference))
+    if getattr(args, "relationship_config", None) or getattr(args, "relationship_master", None):
+        entity_ids = {
+            candidate.entity_id
+            for provider in providers if isinstance(provider, LocalSecurityMasterProvider)
+            for candidate in provider.candidates
+        }
+        if getattr(args, "relationship_config", None):
+            providers.append(CustomerRelationshipMasterProvider.from_config(args.relationship_config, entity_ids=entity_ids or None))
+        else:
+            providers.append(CustomerRelationshipMasterProvider(
+                args.relationship_master, getattr(args, "relationship_mapping", None), entity_ids=entity_ids or None,
+            ))
     if args.gleif:
         providers.append(GLEIFProvider(SQLiteCache(args.cache), offline=args.offline))
     if args.sec:
@@ -312,11 +340,28 @@ def cmd_provider_test(args: argparse.Namespace) -> int:
     if args.openfigi:
         providers.append(OpenFIGIProvider(args.openfigi_api_key or os.getenv("OPENFIGI_API_KEY"), SQLiteCache(args.cache), offline=args.offline))
     if not providers:
-        raise IngestionError("Choose --reference and/or --gleif.")
+        raise IngestionError("Choose --reference, --relationship-master, --relationship-config, and/or a network provider.")
     print(json.dumps({
         "providers": [provider.health_check() for provider in providers],
         "capabilityTrustMatrix": [provider.metadata() for provider in providers],
     }, indent=2))
+    return 0
+
+
+def cmd_relationships_validate(args: argparse.Namespace) -> int:
+    entity_ids = None
+    if getattr(args, "entity_master", None):
+        entity_ids = {candidate.entity_id for candidate in LocalSecurityMasterProvider(args.entity_master).candidates}
+    report = validate_relationship_file(args.input, args.mapping, entity_ids=entity_ids)
+    print(json.dumps(report.to_dict(), indent=2))
+    return 0 if report.valid else 2
+
+
+def cmd_relationships_inspect(args: argparse.Namespace) -> int:
+    provider = CustomerRelationshipMasterProvider(
+        args.input, args.mapping, trust_level=args.trust_level,
+    )
+    print(json.dumps(provider.inspect(args.entity_id, args.date, args.max_depth), indent=2, default=str))
     return 0
 
 
@@ -371,10 +416,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("--input", required=True); preview.add_argument("--samples", type=int, default=5); preview.set_defaults(func=cmd_preview)
     validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.add_argument("--date-format"); validate.set_defaults(func=cmd_validate)
-    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway decision policy configuration"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--legacy-output", action="store_true", help="Deprecated: emit the pre-2.0 monolithic result schema"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
+    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--relationship-master"); resolve.add_argument("--relationship-mapping"); resolve.add_argument("--relationship-config"); resolve.add_argument("--relationship-trust-level", choices=["authoritative", "supporting", "experimental"], default="authoritative"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway decision policy configuration"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--legacy-output", action="store_true", help="Deprecated: emit the pre-2.0 monolithic result schema"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
     export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.add_argument("--status", action="append", choices=["entity_and_security_matched", "entity_matched_security_unknown", "entity_matched_parent_candidate", "private_entity", "review_required", "ambiguous", "unmatched", "temporal_verification_required", "provider_error", "license_blocked", "matched"]); export.add_argument("--overwrite", action="store_true"); export.set_defaults(func=cmd_export)
     migrate = sub.add_parser("migrate"); migrate_sub = migrate.add_subparsers(dest="migrate_command", required=True); migrate_results = migrate_sub.add_parser("results", help="Migrate legacy result files to schema 2.0"); migrate_results.add_argument("--input", required=True); migrate_results.add_argument("--output", required=True); migrate_results.add_argument("--overwrite", action="store_true"); migrate_results.set_defaults(func=cmd_migrate_results)
-    providers = sub.add_parser("providers"); provider_sub = providers.add_subparsers(required=True); provider_test = provider_sub.add_parser("test"); provider_test.add_argument("--reference"); provider_test.add_argument("--gleif", action="store_true"); provider_test.add_argument("--sec", action="store_true"); provider_test.add_argument("--sec-user-agent"); provider_test.add_argument("--openfigi", action="store_true"); provider_test.add_argument("--openfigi-api-key"); provider_test.add_argument("--cache", default=".symbologylink/cache.sqlite3"); provider_test.add_argument("--offline", action="store_true"); provider_test.set_defaults(func=cmd_provider_test)
+    providers = sub.add_parser("providers"); provider_sub = providers.add_subparsers(required=True); provider_test = provider_sub.add_parser("test"); provider_test.add_argument("--reference"); provider_test.add_argument("--relationship-master"); provider_test.add_argument("--relationship-mapping"); provider_test.add_argument("--relationship-config"); provider_test.add_argument("--gleif", action="store_true"); provider_test.add_argument("--sec", action="store_true"); provider_test.add_argument("--sec-user-agent"); provider_test.add_argument("--openfigi", action="store_true"); provider_test.add_argument("--openfigi-api-key"); provider_test.add_argument("--cache", default=".symbologylink/cache.sqlite3"); provider_test.add_argument("--offline", action="store_true"); provider_test.set_defaults(func=cmd_provider_test)
+    relationships = sub.add_parser("relationships"); relationship_sub = relationships.add_subparsers(required=True); relationship_validate = relationship_sub.add_parser("validate"); relationship_validate.add_argument("--input", required=True); relationship_validate.add_argument("--mapping"); relationship_validate.add_argument("--entity-master"); relationship_validate.set_defaults(func=cmd_relationships_validate); relationship_inspect = relationship_sub.add_parser("inspect"); relationship_inspect.add_argument("--input", required=True); relationship_inspect.add_argument("--mapping"); relationship_inspect.add_argument("--entity-id", required=True); relationship_inspect.add_argument("--date"); relationship_inspect.add_argument("--trust-level", choices=["authoritative", "supporting", "experimental"], default="authoritative"); relationship_inspect.add_argument("--max-depth", type=int, default=8); relationship_inspect.set_defaults(func=cmd_relationships_inspect)
     benchmark = sub.add_parser("benchmark"); benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
     benchmark_generate = benchmark_sub.add_parser("generate"); benchmark_generate.add_argument("--reference", required=True); benchmark_generate.add_argument("--output-dir", required=True); benchmark_generate.add_argument("--count", type=int, default=1000); benchmark_generate.add_argument("--seed", type=int, default=20260716); benchmark_generate.set_defaults(func=cmd_benchmark)
     benchmark_evaluate = benchmark_sub.add_parser("evaluate"); benchmark_evaluate.add_argument("--results", required=True); benchmark_evaluate.add_argument("--truth", required=True); benchmark_evaluate.add_argument("--output"); benchmark_evaluate.add_argument("--html"); benchmark_evaluate.set_defaults(func=cmd_benchmark)
