@@ -126,6 +126,12 @@ Invalid periods, conflicting entity attributes, duplicate security identifiers, 
 
 Relationship columns embedded in a security master remain backward-compatible candidate evidence. Use the dedicated customer relationship master when a parent relationship should be eligible for verification.
 
+### Customer-master blocking and memory
+
+The customer security master is indexed once when it is loaded. Identifier, domain, exact-name, alias, and name-token lookups then generate candidates from small blocks instead of scanning every master row for every input record. Blocking does not change scoring or decision policy; it only limits which already-eligible rows reach the existing scorer. Candidate ordering remains deterministic, and non-first name tokens broaden recall when no exact identifier, domain, or name block succeeds.
+
+Indexes keep references to the loaded candidate objects plus normalized string keys. This trades memory for predictable batch speed: a million-row master can require low hundreds of megabytes beyond the source data, depending on alias and identifier density. Run large masters in a process with sufficient available memory. Symbology Link fails with a clear provider error if the index cannot be allocated; disk-backed indexes are not part of v1.
+
 ## Customer relationship master
 
 The dedicated `customer_relationship_master` provider is the trusted source for subsidiary, ownership, brand, division, operating, ultimate-parent, minority, and former-ownership relationships. Its canonical fields are:
@@ -361,6 +367,17 @@ symbologylink benchmark generate \
 ```
 
 The benchmark is deterministic synthetic regression data. Reports include metric numerators and denominators, Wilson confidence intervals, sample-size warnings, decision-pathway breakdowns, per-pathway median/P95 latency, confidence-calibration bins, abstention precision, negative recall, false-rejection rate, and representative false-rejection examples. It does not represent production accuracy. Public accuracy claims require independently labeled records and a frozen holdout set.
+
+Benchmark local provider candidate generation separately:
+
+```console
+python scripts/bench_provider_search.py \
+  --master-rows 100000 \
+  --records 10000 \
+  --assert-targets
+```
+
+The script measures the complete indexed batch and a small legacy linear-scan sample, then reports the projected legacy duration, measured indexed duration, records per second, and estimated speedup. Loading and index construction are reported separately from candidate-generation time.
 
 ## Testing
 
