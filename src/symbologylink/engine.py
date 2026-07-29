@@ -182,6 +182,58 @@ class MatchEngine:
                 ",".join(providers), detail="relationship_effective_dates is not declared by the provider.",
             ))
 
+    def _apply_temporal_policy(
+        self,
+        status: str,
+        validity: dict,
+        evidence: list[MatchEvidence],
+    ) -> str:
+        """Apply the configured unknown policy after component validity is combined."""
+        overall = validity["overall"]
+        temporal_policy = self.decision_policies.temporal
+        action = temporal_policy.action_for(overall.get("status"))
+        overall["policy"] = {
+            "requireVerifiedForAutoMatch": temporal_policy.require_verified_for_auto_match,
+            "unknownBehavior": temporal_policy.unknown_behavior,
+        }
+        overall["policyAction"] = action
+        if action == "allow":
+            overall["policyReason"] = "Temporal evidence satisfies the configured policy."
+            return status
+        if action == "allow_with_warning":
+            overall["policyReason"] = "Temporal evidence is inconclusive; auto-match remains allowed with a warning."
+            evidence.append(MatchEvidence(
+                "temporal_verification_warning",
+                candidate=overall.get("status"),
+                provider="temporal_policy",
+                detail=overall["policyReason"],
+            ))
+            return status
+        if action == "reject":
+            overall["policyReason"] = "Temporal evidence is inconclusive and the configured policy rejects automatic resolution."
+            evidence.append(MatchEvidence(
+                "temporal_verification_rejected",
+                candidate=overall.get("status"),
+                scoreContribution=-100,
+                provider="temporal_policy",
+                detail=overall["policyReason"],
+            ))
+            return "unmatched" if status not in {"unmatched", "provider_error"} else status
+        overall["policyReason"] = (
+            "Temporal evidence contradicts the observation date."
+            if overall.get("status") == "invalid"
+            else "Temporal evidence is inconclusive and must be verified before automatic resolution."
+        )
+        if overall.get("status") != "invalid":
+            evidence.append(MatchEvidence(
+                "temporal_verification_required",
+                candidate=overall.get("status"),
+                scoreContribution=-100,
+                provider="temporal_policy",
+                detail=overall["policyReason"],
+            ))
+        return "review_required" if status == "matched" else status
+
     def _decision_result(self, record: EntityMatchInput, decision: Decision) -> EntityMatchResult:
         evidence_type = "human_override" if decision.source == "human_override" else "reusable_rule_match"
         primary_pathway = "human_override" if decision.source == "human_override" else "customer_rule"
@@ -223,7 +275,8 @@ class MatchEngine:
                 1.0,
                 active_security=security_validity.get("validOnObservationDate") is True,
             )
-        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity if status != "unmatched" else None, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), securityEvidence=security_evidence, publicParent=public_parent, parentStatus=parent["status"], parentAlternatives=parent["alternatives"], parentEvidence=parent["evidence"], relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], decisionSource=decision.source, decisionVersion=decision.version, matchScore=1.0, primaryPathway=primary_pathway, securityMatchScore=1.0 if security_match else 0, securityPrimaryPathway=security_match.primaryPathway if security_match else "unknown", entityDecisionStatus=entity_status, observationDate=record.observationDate)
+        status = self._apply_temporal_policy(status, validity, evidence)
+        return EntityMatchResult(record.recordId, status, 1.0 if status == "matched" else .8, [], evidence, mapping_version, matchedEntity=entity if entity_status != "unmatched" else None, matchedSecurity=security_match.security if security_status == "matched" else None, securityDecisionStatus=security_status, securityConfidence=security_match.confidence if security_match else 0, securityAlternatives=[] if security_status == "matched" else ([security_match] if security_match else []), securityEvidence=security_evidence, publicParent=public_parent, parentStatus=parent["status"], parentAlternatives=parent["alternatives"], parentEvidence=parent["evidence"], relationshipGraph=graph, relationshipStatus=graph["status"], validity=validity, validOnObservationDate=overall["validOnObservationDate"], pointInTimeStatus=overall["status"], pointInTimeReason=overall["reason"], decisionSource=decision.source, decisionVersion=decision.version, matchScore=1.0, primaryPathway=primary_pathway, securityMatchScore=1.0 if security_match else 0, securityPrimaryPathway=security_match.primaryPathway if security_match else "unknown", entityDecisionStatus=entity_status, observationDate=record.observationDate)
 
     def _score(self, record: EntityMatchInput, candidate: ProviderCandidate) -> CandidateMatch:
         w = self.config.weights
@@ -770,6 +823,8 @@ class MatchEngine:
             status = "review_required"
         if validity and validity["overall"]["validOnObservationDate"] is False:
             status = "review_required"
+        if validity:
+            status = self._apply_temporal_policy(status, validity, best.evidence)
         matched_entity = {"entityId": best.entityId, "canonicalName": best.canonicalName, "entityType": best.entityType} if entity_status != "unmatched" else None
         alternatives = ranked[1:] if entity_status != "unmatched" else ranked
         overall = validity["overall"] if validity else {"status": "not_verified", "validOnObservationDate": None, "reason": "No candidate was selected for complete temporal evaluation."}

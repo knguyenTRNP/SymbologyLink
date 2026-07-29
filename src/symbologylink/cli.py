@@ -221,6 +221,13 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             raise IngestionError(f"Invalid legacy thresholds: {exc}") from exc
     else:
         decision_policies = DecisionPolicySet.load(args.decision_policies)
+    temporal_changes = {}
+    if args.require_temporal_verification:
+        temporal_changes["require_verified_for_auto_match"] = True
+    if args.temporal_unknown_behavior:
+        temporal_changes["unknown_behavior"] = args.temporal_unknown_behavior
+    if temporal_changes:
+        decision_policies = decision_policies.with_temporal(**temporal_changes)
     engine = MatchEngine(providers, config, RuleSet.load(args.rules), OverrideStore(args.overrides) if args.overrides else None, decision_policies)
     legacy_output = bool(getattr(args, "legacy_output", False))
     if legacy_output:
@@ -247,7 +254,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             result["mapping_content_sha256"] = mapping_hash
             result["mapping_fingerprint_sha256"] = mapping_profile_hash
     _write_result_rows(output, results)
-    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "schemaVersion": "1.x-legacy" if legacy_output else SCHEMA_VERSION, "mappingContentSha256": mapping_hash, "mappingFingerprintSha256": mapping_profile_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions, "providerMetadata": provider_metadata}, indent=2))
+    print(json.dumps({"status": "completed", "records": profile.row_count, "output": str(output.resolve()), "mappingVersion": args.mapping_version, "schemaVersion": "1.x-legacy" if legacy_output else SCHEMA_VERSION, "mappingContentSha256": mapping_hash, "mappingFingerprintSha256": mapping_profile_hash, "dateFormat": date_format, "inputFileSha256": profile.sha256, "engineVersion": engine_version, "providerVersions": provider_versions, "providerMetadata": provider_metadata, "temporalPolicy": asdict(decision_policies.temporal)}, indent=2))
     return 0
 
 
@@ -269,7 +276,10 @@ def cmd_export(args: argparse.Namespace) -> int:
         "record_id", "entity_status", "entity_id", "entity_name", "entity_match_score", "entity_match_pathway",
         "parent_status", "parent_id", "parent_name", "relationship_type", "relationship_source",
         "security_status", "security_id", "ticker", "exchange", "figi", "share_class", "security_type",
-        "observation_date", "temporal_status", "temporal_reason", "final_decision", "review_reason",
+        "observation_date", "entity_temporal_status", "entity_temporal_reason",
+        "relationship_temporal_status", "relationship_temporal_reason",
+        "security_temporal_status", "security_temporal_reason",
+        "temporal_status", "temporal_reason", "final_decision", "review_reason",
         "mapping_version", "schema_version",
     ]
     fields = list(dict.fromkeys([*source_fields, *enrichment_fields]))
@@ -280,7 +290,11 @@ def cmd_export(args: argparse.Namespace) -> int:
             entity, parent, security = row.get("entity") or {}, row.get("public_parent") or {}, row.get("security") or {}
             security_attributes = security.get("attributes") or {}
             parent_attributes = parent.get("attributes") or {}
-            temporal = (row.get("temporal") or {}).get("overall") or {}
+            temporal_scopes = row.get("temporal") or {}
+            entity_temporal = temporal_scopes.get("entity") or {}
+            relationship_temporal = temporal_scopes.get("public_parent") or {}
+            security_temporal = temporal_scopes.get("security") or {}
+            temporal = temporal_scopes.get("overall") or {}
             enriched = {
                 "record_id": row.get("record_id"),
                 "entity_status": entity.get("status"), "entity_id": entity.get("canonical_id"), "entity_name": entity.get("canonical_name"),
@@ -291,6 +305,9 @@ def cmd_export(args: argparse.Namespace) -> int:
                 "ticker": security_attributes.get("ticker"), "exchange": security_attributes.get("exchange"), "figi": security_attributes.get("figi"),
                 "share_class": security_attributes.get("share_class") or security_attributes.get("shareClass"),
                 "security_type": security_attributes.get("security_type") or security_attributes.get("securityType"),
+                "entity_temporal_status": entity_temporal.get("status"), "entity_temporal_reason": entity_temporal.get("reason"),
+                "relationship_temporal_status": relationship_temporal.get("status"), "relationship_temporal_reason": relationship_temporal.get("reason"),
+                "security_temporal_status": security_temporal.get("status"), "security_temporal_reason": security_temporal.get("reason"),
                 "observation_date": row.get("observation_date"), "temporal_status": temporal.get("status"), "temporal_reason": temporal.get("reason"),
                 "final_decision": row.get("final_decision"), "review_reason": " | ".join(row.get("review_reasons") or []),
                 "mapping_version": row.get("mapping_version"), "schema_version": row.get("schema_version"),
@@ -416,7 +433,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("--input", required=True); preview.add_argument("--samples", type=int, default=5); preview.set_defaults(func=cmd_preview)
     validate = sub.add_parser("validate"); validate.add_argument("--input", required=True); validate.add_argument("--mapping"); validate.add_argument("--date-format"); validate.set_defaults(func=cmd_validate)
-    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--relationship-master"); resolve.add_argument("--relationship-mapping"); resolve.add_argument("--relationship-config"); resolve.add_argument("--relationship-trust-level", choices=["authoritative", "supporting", "experimental"], default="authoritative"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway decision policy configuration"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--legacy-output", action="store_true", help="Deprecated: emit the pre-2.0 monolithic result schema"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
+    resolve = sub.add_parser("resolve"); resolve.add_argument("--input", required=True); resolve.add_argument("--mapping"); resolve.add_argument("--date-format"); resolve.add_argument("--reference"); resolve.add_argument("--providers", default="customer_security_master"); resolve.add_argument("--relationship-master"); resolve.add_argument("--relationship-mapping"); resolve.add_argument("--relationship-config"); resolve.add_argument("--relationship-trust-level", choices=["authoritative", "supporting", "experimental"], default="authoritative"); resolve.add_argument("--cache", default=".symbologylink/cache.sqlite3"); resolve.add_argument("--offline", action="store_true"); resolve.add_argument("--sec-user-agent"); resolve.add_argument("--openfigi-api-key"); resolve.add_argument("--openfigi-name-search", action="store_true"); resolve.add_argument("--rules"); resolve.add_argument("--overrides"); resolve.add_argument("--decision-policies", help="JSON or YAML pathway and temporal policy configuration"); resolve.add_argument("--require-temporal-verification", action="store_true", help="Require conclusive temporal evidence before auto-match"); resolve.add_argument("--temporal-unknown-behavior", choices=["allow_with_warning", "review", "reject"], help="Override how inconclusive temporal evidence affects resolution"); resolve.add_argument("--output", required=True); resolve.add_argument("--overwrite", action="store_true"); resolve.add_argument("--legacy-output", action="store_true", help="Deprecated: emit the pre-2.0 monolithic result schema"); resolve.add_argument("--auto-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--review-threshold", type=float, default=None, help="Deprecated: use --decision-policies"); resolve.add_argument("--max-candidates", type=int, default=20); resolve.add_argument("--relationship-max-depth", type=int, default=8); resolve.add_argument("--mapping-version", default="v1"); resolve.set_defaults(func=cmd_resolve)
     export = sub.add_parser("export"); export.add_argument("--input", required=True); export.add_argument("--output", required=True); export.add_argument("--status", action="append", choices=["entity_and_security_matched", "entity_matched_security_unknown", "entity_matched_parent_candidate", "private_entity", "review_required", "ambiguous", "unmatched", "temporal_verification_required", "provider_error", "license_blocked", "matched"]); export.add_argument("--overwrite", action="store_true"); export.set_defaults(func=cmd_export)
     migrate = sub.add_parser("migrate"); migrate_sub = migrate.add_subparsers(dest="migrate_command", required=True); migrate_results = migrate_sub.add_parser("results", help="Migrate legacy result files to schema 2.0"); migrate_results.add_argument("--input", required=True); migrate_results.add_argument("--output", required=True); migrate_results.add_argument("--overwrite", action="store_true"); migrate_results.set_defaults(func=cmd_migrate_results)
     providers = sub.add_parser("providers"); provider_sub = providers.add_subparsers(required=True); provider_test = provider_sub.add_parser("test"); provider_test.add_argument("--reference"); provider_test.add_argument("--relationship-master"); provider_test.add_argument("--relationship-mapping"); provider_test.add_argument("--relationship-config"); provider_test.add_argument("--gleif", action="store_true"); provider_test.add_argument("--sec", action="store_true"); provider_test.add_argument("--sec-user-agent"); provider_test.add_argument("--openfigi", action="store_true"); provider_test.add_argument("--openfigi-api-key"); provider_test.add_argument("--cache", default=".symbologylink/cache.sqlite3"); provider_test.add_argument("--offline", action="store_true"); provider_test.set_defaults(func=cmd_provider_test)

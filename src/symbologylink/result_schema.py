@@ -62,11 +62,15 @@ def _temporal_scope(value: dict[str, Any] | None) -> dict[str, Any]:
         "partial": "unknown",
     }.get(internal, "unknown")
     return {
+        "scope": scope.get("scope"),
         "status": status,
-        "reason": scope.get("reason"),
+        "reason": scope.get("reason") or "No temporal evaluation was available for this scope.",
         "valid_on_observation_date": scope.get("validOnObservationDate"),
         "periods": list(scope.get("periods") or []),
         "internal_status": internal,
+        "policy_action": scope.get("policyAction") or scope.get("policy_action"),
+        "policy_reason": scope.get("policyReason") or scope.get("policy_reason"),
+        "policy": dict(scope.get("policy") or {}),
     }
 
 
@@ -82,6 +86,9 @@ def _legacy_temporal_scope(value: dict[str, Any] | None) -> dict[str, Any]:
         "validOnObservationDate": scope.get("valid_on_observation_date"),
         "reason": scope.get("reason"),
         "periods": list(scope.get("periods") or []),
+        "policyAction": scope.get("policy_action"),
+        "policyReason": scope.get("policy_reason"),
+        "policy": dict(scope.get("policy") or {}),
     }
 
 
@@ -90,7 +97,8 @@ def _final_decision(entity: ResolutionComponent, parent: ResolutionComponent, se
         return "provider_error"
     if any(item.get("type") == "license_blocked" for item in evidence):
         return "license_blocked"
-    if (temporal.get("overall") or {}).get("status") == "contradicted":
+    overall_temporal = temporal.get("overall") or {}
+    if overall_temporal.get("status") == "contradicted" or overall_temporal.get("policy_action") in {"review", "reject"}:
         return "temporal_verification_required"
     if entity.status == "unknown":
         return "unmatched"

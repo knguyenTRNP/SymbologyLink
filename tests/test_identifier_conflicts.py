@@ -112,7 +112,7 @@ class IdentifierConflictDiscoveryTests(unittest.TestCase):
         self.assertEqual(result.status, "review_required")
         self.assertEqual(result.securityDecisionStatus, "review_required")
         self.assertIsNone(result.matchedSecurity)
-        conflict = next(item for item in result.evidence if item.type == "security_identifier_conflict")
+        conflict = next(item for item in result.securityEvidence if item.type == "security_identifier_conflict")
         self.assertEqual({signal["field"] for signal in conflict.input}, {"figi", "isin"})
 
 
