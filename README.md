@@ -1,6 +1,6 @@
 # Symbology Link
 
-Symbology Link is a local-first entity and security resolution engine. It links uploaded company records to legal entities, issuers, parent organizations, and securities while preserving evidence, alternatives, provider provenance, and point-in-time validity.
+Symbology Link is a local-first entity and security resolution engine. It links uploaded company records to legal entities, issuers, parent organizations, and securities while preserving evidence, alternatives, provider provenance, and point-in-time awareness.
 
 ## Features
 
@@ -261,6 +261,27 @@ symbologylink resolve \
   --output results.jsonl
 ```
 
+The same policy file can configure temporal uncertainty:
+
+```json
+{
+  "temporal": {
+    "require_verified_for_auto_match": false,
+    "unknown_behavior": "allow_with_warning"
+  }
+}
+```
+
+`unknown_behavior` accepts `allow_with_warning`, `review`, or `reject`. The default preserves automatic matches but adds explicit temporal-warning evidence when applicable evidence is inconclusive. `review` routes the record to `temporal_verification_required`; `reject` rejects the automatic resolution while preserving the independently resolved components and evidence.
+
+Enable strict mode for one run without changing the configuration file:
+
+```console
+symbologylink resolve ... --require-temporal-verification --output results.jsonl
+```
+
+Strict mode requires every applicable temporal scope to be verified before auto-match. Missing observation dates remain `not_requested` and are never replaced with today’s date. Contradicted periods cannot auto-match in any mode.
+
 The legacy `--auto-threshold` and `--review-threshold` options remain available during migration, but emit a deprecation warning and cannot be combined with `--decision-policies`.
 
 To temporarily emit the pre-2.0 monolithic result shape, pass deprecated `--legacy-output`. Legacy output is never selected implicitly:
@@ -277,7 +298,7 @@ symbologylink migrate results --input v1.jsonl --output v2.jsonl
 
 Migration treats every legacy parent as a candidate. A legacy security becomes verified only when stored evidence contains an exact FIGI, ISIN, CUSIP, or ticker-plus-exchange match. Historical completed jobs in `jobs.sqlite3` are not rewritten.
 
-Flat CSV export includes `record_id`, entity status/identity/score/pathway, parent status/identity/relationship source, security status/identity/listing fields, observation and temporal status, `final_decision`, `review_reason`, `mapping_version`, and `schema_version`, alongside the original source columns.
+Flat CSV export includes `record_id`, entity status/identity/score/pathway, parent status/identity/relationship source, security status/identity/listing fields, observation date, per-component temporal statuses and reasons, overall temporal status and reason, `final_decision`, `review_reason`, `mapping_version`, and `schema_version`, alongside the original source columns.
 
 `resolve` and `export` protect existing output files by default; pass `--overwrite` to replace one intentionally. Resolve results are written to a sibling `.partial` file and published under the requested output name only after the write completes. If a run is interrupted, the previous completed output is preserved and the retry is not blocked by a partial result. A review queue can be exported directly with `symbologylink export --input results.jsonl --output review.csv --status review_required`.
 
@@ -292,7 +313,7 @@ Conflict evidence types are:
 - `provider_capability_rejected`
 - `conflict_probe_error`
 
-## Relationships and point-in-time validity
+## Relationships and point-in-time awareness
 
 Relationship graphs distinguish operational chains from GLEIF accounting-consolidation relationships. Results may include direct parent, ultimate parent, accounting direct parent, accounting ultimate parent, and issuer nodes.
 
@@ -300,7 +321,7 @@ Parent selection is candidate-first. `public_parent.status` records the outcome,
 
 Every relationship edge records `source`, `trustLevel`, `selfReported`, and whether effective dates are within provider capability. GLEIF Level 2 edges are marked self-reported. Conflicting parents are retained rather than collapsed; conflicting authoritative sources set `parentStatus` to `contradicted` and force review.
 
-Entity, security, and relationship periods are evaluated independently against `observationDate`. Missing dates remain `not_verified`; current provider records are not assumed to be historically valid.
+Entity, security, and relationship periods are evaluated independently against `observationDate`. Schema 2.0 reports `verified`, `unknown`, `contradicted`, `not_requested`, or `not_applicable` with a reason for every scope and for the overall result. Internally, missing dates remain `not_verified`; current provider records are not assumed to be historically valid. A provider cannot produce temporal `verified` status unless it declares the corresponding effective-date capability.
 
 For API deployment, configure `SYMBOLOGYLINK_RELATIONSHIP_MASTER` plus optional `SYMBOLOGYLINK_RELATIONSHIP_MAPPING`, or set `SYMBOLOGYLINK_RELATIONSHIP_CONFIG` to a JSON/YAML configuration block. `SYMBOLOGYLINK_RELATIONSHIP_TRUST_LEVEL` defaults to `authoritative`.
 
@@ -337,7 +358,9 @@ Important environment variables:
 | Variable | Purpose |
 |---|---|
 | `SYMBOLOGYLINK_REFERENCE` | Customer security master |
-| `SYMBOLOGYLINK_DECISION_POLICIES` | JSON or YAML pathway decision policy configuration |
+| `SYMBOLOGYLINK_DECISION_POLICIES` | JSON or YAML pathway and temporal policy configuration |
+| `SYMBOLOGYLINK_REQUIRE_TEMPORAL_VERIFICATION` | Require verified applicable temporal scopes before auto-match |
+| `SYMBOLOGYLINK_TEMPORAL_UNKNOWN_BEHAVIOR` | `allow_with_warning`, `review`, or `reject` |
 | `SYMBOLOGYLINK_ENABLE_GLEIF` | Enable GLEIF |
 | `SYMBOLOGYLINK_ENABLE_SEC` | Enable SEC |
 | `SYMBOLOGYLINK_SEC_USER_AGENT` | SEC organization and contact |

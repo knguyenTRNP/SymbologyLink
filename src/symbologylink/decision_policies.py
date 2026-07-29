@@ -26,6 +26,32 @@ ENTITY_PATHWAYS = (
     "unknown",
 )
 
+TEMPORAL_UNKNOWN_BEHAVIORS = {"allow_with_warning", "review", "reject"}
+
+
+@dataclass(frozen=True, slots=True)
+class TemporalPolicy:
+    require_verified_for_auto_match: bool = False
+    unknown_behavior: str = "allow_with_warning"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.require_verified_for_auto_match, bool):
+            raise ValueError("temporal.require_verified_for_auto_match must be true or false.")
+        if self.unknown_behavior not in TEMPORAL_UNKNOWN_BEHAVIORS:
+            allowed = ", ".join(sorted(TEMPORAL_UNKNOWN_BEHAVIORS))
+            raise ValueError(f"temporal.unknown_behavior must be one of: {allowed}.")
+
+    def action_for(self, temporal_status: str | None) -> str:
+        if temporal_status == "invalid":
+            return "review"
+        if temporal_status not in {"not_requested", "not_verified", "partial"}:
+            return "allow"
+        if self.unknown_behavior == "reject":
+            return "reject"
+        if self.require_verified_for_auto_match or self.unknown_behavior == "review":
+            return "review"
+        return "allow_with_warning"
+
 
 @dataclass(frozen=True, slots=True)
 class DecisionPolicy:
@@ -102,8 +128,9 @@ def _load_structured(path: Path) -> Any:
 
 
 class DecisionPolicySet:
-    def __init__(self, policies: dict[str, DecisionPolicy] | None = None):
+    def __init__(self, policies: dict[str, DecisionPolicy] | None = None, temporal: TemporalPolicy | None = None):
         self.policies = policies or default_decision_policies()
+        self.temporal = temporal or TemporalPolicy()
 
     @classmethod
     def load(cls, path: str | Path | None) -> "DecisionPolicySet":
@@ -116,11 +143,12 @@ class DecisionPolicySet:
         value = _load_structured(policy_path) or {}
         if not isinstance(value, dict):
             raise ValueError("Decision policy configuration must be an object.")
-        if "decision_policies" in value:
-            unknown_top_level = sorted(set(value) - {"decision_policies"})
+        wrapped = "decision_policies" in value or "temporal" in value
+        if wrapped:
+            unknown_top_level = sorted(set(value) - {"decision_policies", "temporal"})
             if unknown_top_level:
                 raise ValueError(f"Unknown decision policy configuration key(s): {', '.join(unknown_top_level)}")
-        raw_policies = value.get("decision_policies", value)
+        raw_policies = value.get("decision_policies", {}) if wrapped else value
         if not isinstance(raw_policies, dict):
             raise ValueError("decision_policies must be an object keyed by pathway.")
         unknown_pathways = sorted(set(raw_policies) - set(ENTITY_PATHWAYS))
@@ -134,7 +162,14 @@ class DecisionPolicySet:
             if unknown_fields:
                 raise ValueError(f"Unknown field(s) for decision policy {pathway!r}: {', '.join(unknown_fields)}")
             defaults[pathway] = replace(defaults[pathway], **raw_policy)
-        return cls(defaults)
+        raw_temporal = value.get("temporal", {}) if wrapped else {}
+        if not isinstance(raw_temporal, dict):
+            raise ValueError("temporal must be an object.")
+        temporal_fields = {item.name for item in fields(TemporalPolicy)}
+        unknown_temporal = sorted(set(raw_temporal) - temporal_fields)
+        if unknown_temporal:
+            raise ValueError(f"Unknown temporal policy field(s): {', '.join(unknown_temporal)}")
+        return cls(defaults, TemporalPolicy(**raw_temporal))
 
     @classmethod
     def legacy(cls, auto_match_threshold: float, review_threshold: float) -> "DecisionPolicySet":
@@ -149,6 +184,9 @@ class DecisionPolicySet:
 
     def policy_for(self, pathway: str | None) -> DecisionPolicy:
         return self.policies.get(pathway or "unknown", self.policies["unknown"])
+
+    def with_temporal(self, **changes: Any) -> "DecisionPolicySet":
+        return DecisionPolicySet(dict(self.policies), replace(self.temporal, **changes))
 
     def decide(self, pathway: str | None, match_score: float, has_conflict: bool = False, active_security: bool = True) -> str:
         return self.policy_for(pathway).decide(match_score, has_conflict, active_security)

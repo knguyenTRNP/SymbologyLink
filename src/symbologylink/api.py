@@ -48,6 +48,8 @@ class Settings:
         self.relationship_trust_level = os.getenv("SYMBOLOGYLINK_RELATIONSHIP_TRUST_LEVEL", "authoritative")
         self.rules = os.getenv("SYMBOLOGYLINK_RULES", ".symbologylink/rules.json")
         self.decision_policies = os.getenv("SYMBOLOGYLINK_DECISION_POLICIES")
+        self.require_temporal_verification = os.getenv("SYMBOLOGYLINK_REQUIRE_TEMPORAL_VERIFICATION", "false").lower() == "true"
+        self.temporal_unknown_behavior = os.getenv("SYMBOLOGYLINK_TEMPORAL_UNKNOWN_BEHAVIOR")
         self.overrides = os.getenv("SYMBOLOGYLINK_OVERRIDES", ".symbologylink/overrides.jsonl")
         self.cache = os.getenv("SYMBOLOGYLINK_CACHE", ".symbologylink/cache.sqlite3")
         self.jobs = os.getenv("SYMBOLOGYLINK_JOBS", ".symbologylink/jobs.sqlite3")
@@ -121,7 +123,15 @@ def providers() -> list[MatchProvider]:
 
 
 def engine() -> MatchEngine:
-    return MatchEngine(providers(), MatchConfig(relationship_max_depth=settings.relationship_max_depth), RuleSet.load(settings.rules), override_store, DecisionPolicySet.load(settings.decision_policies))
+    decision_policies = DecisionPolicySet.load(settings.decision_policies)
+    temporal_changes = {}
+    if settings.require_temporal_verification:
+        temporal_changes["require_verified_for_auto_match"] = True
+    if settings.temporal_unknown_behavior:
+        temporal_changes["unknown_behavior"] = settings.temporal_unknown_behavior
+    if temporal_changes:
+        decision_policies = decision_policies.with_temporal(**temporal_changes)
+    return MatchEngine(providers(), MatchConfig(relationship_max_depth=settings.relationship_max_depth), RuleSet.load(settings.rules), override_store, decision_policies)
 
 
 app = FastAPI(title="Symbology Link API", version="0.0.0")

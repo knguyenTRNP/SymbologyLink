@@ -81,7 +81,9 @@ class ReconciliationTests(unittest.TestCase):
         engine = MatchEngine([StaticProvider("customer_security_master", local), StaticProvider("sec", sec), StaticProvider("openfigi", figi)])
         result = engine.match(EntityMatchInput("1", entityName="Microsoft Corp", domain="microsoft.com", ticker="MSFT", exchange="NASDAQ", country="US"))
         self.assertEqual(result.matchedEntity["entityId"], "customer:microsoft")
-        self.assertEqual(result.matchedSecurity["figi"], "BBG000BPH459")
+        self.assertEqual(result.securityDecisionStatus, "review_required")
+        self.assertIsNone(result.matchedSecurity)
+        self.assertEqual(result.securityAlternatives[0].security["figi"], "BBG000BPH459")
         agreement = [item for item in result.evidence if item.type == "provider_agreement"]
         self.assertEqual(len(agreement), 1)
         self.assertEqual(set(agreement[0].input), {"customer_security_master", "sec", "openfigi"})
