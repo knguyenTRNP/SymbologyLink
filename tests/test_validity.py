@@ -45,7 +45,8 @@ entity:parent,,Example Parent,issuer,,,,,,,,1990-01-01,,,,,
 
     def test_each_scope_can_be_verified_independently(self):
         result = self.match("2018-06-30")
-        self.assertEqual(result.status, "matched")
+        self.assertEqual(result.status, "review_required")
+        self.assertEqual(result.parentStatus, "candidate")
         self.assertEqual(result.validity["entity"]["status"], "verified")
         self.assertEqual(result.validity["security"]["status"], "verified")
         self.assertEqual(result.validity["relationships"]["status"], "verified")
@@ -60,7 +61,7 @@ entity:parent,,Example Parent,issuer,,,,,,,,1990-01-01,,,,,
         self.assertEqual(result.validity["relationships"]["status"], "verified")
         self.assertEqual(result.validity["overall"]["status"], "invalid")
         self.assertFalse(result.validOnObservationDate)
-        self.assertTrue(any(item.type == "security_observation_date_validity" and item.scoreContribution < 0 for item in result.evidence))
+        self.assertTrue(any(item.type == "security_observation_date_validity" and item.scoreContribution < 0 for item in result.securityEvidence))
 
     def test_future_relationship_is_invalid_without_rewriting_other_scopes(self):
         result = self.match("2012-06-30")
@@ -72,7 +73,8 @@ entity:parent,,Example Parent,issuer,,,,,,,,1990-01-01,,,,,
 
     def test_no_observation_date_is_not_requested_for_every_applicable_scope(self):
         result = self.match()
-        self.assertEqual(result.status, "matched")
+        self.assertEqual(result.status, "review_required")
+        self.assertEqual(result.securityDecisionStatus, "review_required")
         self.assertEqual(result.validity["entity"]["status"], "not_requested")
         self.assertEqual(result.validity["security"]["status"], "not_requested")
         self.assertEqual(result.validity["relationships"]["status"], "not_requested")
