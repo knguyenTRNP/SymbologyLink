@@ -1,0 +1,39 @@
+record_id,expected_entity_id,note
+TXN-2001,entity:microsoft,Truncated descriptor for Microsoft 365 subscription
+TXN-2002,entity:microsoft,MSFT acquirer prefix with opaque invoice token
+TXN-2003,entity:github,Domain present; expect rollup to Microsoft
+TXN-2004,entity:linkedin,Real LinkedIn descriptor format is name plus invoice number
+TXN-2005,entity:amazon,Marketplace descriptor with order token
+TXN-2006,entity:aws,Truncated at 22 chars; trailing AW is a cut-off word
+TXN-2007,entity:whole-foods,Acquirer abbreviation plus city plus store number
+TXN-2008,entity:google,Google Cloud with project token
+TXN-2009,entity:google,Google Ads with account number
+TXN-2010,entity:salesforce,Clean descriptor with domain
+TXN-2011,entity:slack,Workspace id suffix
+TXN-2012,entity:adobe,Product name suffix
+TXN-2013,entity:adobe,Restored row previously deleted to make the engine look better
+TXN-2014,entity:atlassian,Product name suffix; AU country
+TXN-2015,entity:zoom,Support phone number in descriptor
+TXN-2016,entity:sendgrid,Parent brand prefix on subsidiary name
+TXN-2017,entity:vmware,2022 charge; no Broadcom relationship yet at this date
+TXN-2018,entity:vmware,2025 charge; should roll up to Broadcom
+TXN-2019,entity:starbucks,Acquirer abbreviation plus store number
+TXN-2020,entity:delta,Ticket number suffix
+TXN-2021,entity:marriott,Truncated at 20 chars; MARRIOT is missing its final T
+TXN-2022,entity:uber,Product suffix plus trip token
+TXN-2023,entity:apple,Clean descriptor with domain
+TXN-2024,entity:apple,APL acquirer prefix
+TXN-2025,entity:apple-bank,Restored row previously deleted; must not resolve to Apple Inc
+TXN-2026,entity:northwind-catering,Square prefix plus truncation
+TXN-2027,entity:marriott,Property location descriptor
+TXN-2028,entity:amazon,AMZ prefix for Kindle services
+TXN-2029,,Municipal parking; no corporate counterparty
+TXN-2030,,Federal tax payment; no corporate counterparty
+TXN-2031,,State agency fee; no corporate counterparty
+TXN-2032,,Internal payroll funding transfer; not a vendor
+TXN-2033,,Small merchant behind Square; not in the master
+TXN-2034,,Small restaurant behind Toast; not in the master
+TXN-2035,,Unknown supplier behind PayPal; not in the master
+TXN-2036,,Unknown supplier behind Intuit; not in the master
+TXN-2037,,Lookalike trap; Delta Dental is unrelated to Delta Air Lines
+TXN-2038,,Lookalike trap; unrelated restaurant sharing the Apple token

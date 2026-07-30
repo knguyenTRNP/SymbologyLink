@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from symbologylink.engine import MatchEngine
-from symbologylink.ingest import map_row, profile_file, suggest_mapping
+from symbologylink.ingest import IngestionError, map_row, prepare_records, profile_file, suggest_mapping
 from symbologylink.models import EntityMatchInput
 from symbologylink.normalize import normalize_domain, normalize_name
 from symbologylink.providers import LocalSecurityMasterProvider
@@ -28,6 +28,47 @@ class IngestionTests(unittest.TestCase):
         record = map_row(row, mapping, 1, "records.csv")
         self.assertIn("amount", record.metadata)
 
+    def test_duplicate_headers_report_name_and_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate.csv"
+            path.write_text("record_id,name,name\n1,A,B\n", encoding="utf-8")
+            with self.assertRaisesRegex(IngestionError, r"name.*positions 2, 3"):
+                profile_file(path)
+
+    def test_malformed_csv_rows_are_rejected_with_line_number(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "malformed.csv"
+            path.write_text("record_id,name,domain\n1,Good,good.test\n2,Short\n", encoding="utf-8")
+            with self.assertRaisesRegex(IngestionError, r"file line 3.*expected 3 fields, found 2"):
+                profile_file(path)
+
+    def test_preflight_rejects_missing_columns_and_non_matchable_mapping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.csv"
+            path.write_text("record_id,amount\n1,25\n", encoding="utf-8")
+            with self.assertRaisesRegex(IngestionError, "missing source column.*company_name"):
+                prepare_records(path, {"record_id": "recordId", "company_name": "entityName"})
+            with self.assertRaisesRegex(IngestionError, "no useful entity or security fields"):
+                prepare_records(path, {"record_id": "recordId", "amount": "metadata"})
+
+    def test_preflight_rejects_duplicate_ids_with_positions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicates.csv"
+            path.write_text("record_id,company_name\n7,Alpha\n7,Beta\n", encoding="utf-8")
+            with self.assertRaisesRegex(IngestionError, r"identifier '7'.*data rows 1 and 2"):
+                prepare_records(path, {"record_id": "recordId", "company_name": "entityName"})
+
+    def test_preflight_normalizes_typed_dates_and_rejects_invalid_dates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            valid = Path(directory) / "valid.json"
+            valid.write_text('[{"record_id":"1","company_name":"Example","observed":"2025-01-31"}]', encoding="utf-8")
+            _, records = prepare_records(valid, {"record_id": "recordId", "company_name": "entityName", "observed": "observationDate"})
+            self.assertEqual(records[0].observationDate, "2025-01-31")
+            invalid = Path(directory) / "invalid.csv"
+            invalid.write_text("record_id,company_name,observed\n1,Example,not-a-date\n", encoding="utf-8")
+            with self.assertRaisesRegex(IngestionError, r"Invalid observation date.*data row 1"):
+                prepare_records(invalid, {"record_id": "recordId", "company_name": "entityName", "observed": "observationDate"})
+
 
 class RegressionTests(unittest.TestCase):
     @classmethod
@@ -42,8 +83,11 @@ class RegressionTests(unittest.TestCase):
 
     def test_github_keeps_operating_entity_and_parent(self):
         result = self.engine.match(EntityMatchInput("2", entityName="GitHub", domain="github.com", country="US", observationDate="2025-01-01"))
+        self.assertEqual(result.status, "review_required")
         self.assertEqual(result.matchedEntity["entityId"], "entity:github")
         self.assertEqual(result.publicParent["entityId"], "entity:microsoft")
+        self.assertEqual(result.parentStatus, "candidate")
+        self.assertEqual(result.parentAlternatives[0]["sources"], ["customer_security_master"])
         self.assertEqual(result.relationshipGraph["directParent"]["entityId"], "entity:microsoft")
         self.assertEqual(result.relationshipGraph["issuer"]["entityId"], "entity:microsoft")
 

@@ -1,0 +1,301 @@
+record_id,entity_name,domain,ticker,exchange,cik,lei,figi,isin,cusip,country,observation_date,benchmark_category
+bench-000001,Slack Technologies LLC,,,,,,,,,US,2025-01-01,exact_name
+bench-000002,AMAZON  WEB  SERVICES  INC.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000003,Amazon.com,,AMZN,XNAS,0001018724,ZXTILKJKG63JELOEG630,BBG000BVPV84,US0231351067,023135106,US,2025-01-01,legal_suffix_removed
+bench-000004,Slack Technologies,,,,,,,,,US,2025-01-01,alias
+bench-000005,,amazon.com,,,,,,,,US,2025-01-01,domain_only
+bench-000006,,,ZM,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000007,,,,,,549300P8Z9J4ZUZ9M694,,,,US,2025-01-01,strong_identifier
+bench-000008,"Uber Technologies, Icn.",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,single_typo
+bench-000009,,,,,0001650372,,,,,US,2025-01-01,cik_only
+bench-000010,,,,,,,BBG002B04MT8,,,US,2025-01-01,figi_only
+bench-000011,,,TEAM,,,,,,,US,2025-01-01,ticker_only
+bench-000012,"Salesforce, Inc.",,,,0001108524,C31Y1RQFAOY6DVJ3JG23,BBG0022P0T29,US79466L3024,79466L302,US,2025-01-01,conflicting_identifier
+bench-000013,Inc Broadcom,,AVGO,XNAS,0001730168,549300WV6GIDOZJTV909,BBG00KHY5S69,US11135F1012,11135F101,US,2025-01-01,swapped_words
+bench-000014,LinkedIn Corporation North America,,,,,,,,,US,2025-01-01,added_division
+bench-000015,SendGrid Inc,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000016,Zoom Communications Inc,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,1900-01-01,historical_date
+bench-000017,Northstar Fictional Industries 16 LLC,northstar-fictional-16.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000018,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000019,,,ZZ018,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000020,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000021,Amazon River Tours 20,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000022,Harborview Family Office 21,harborview-private-21.example,,,,,,,,US,2025-01-01,private_company
+bench-000023,"Salesforce, Inc.",,,,,,,,,US,2025-01-01,exact_name
+bench-000024,"UBER  TECHNOLOGIES,  INC..",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,case_and_punctuation
+bench-000025,Slack Technologies,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000026,Zoom,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,2025-01-01,alias
+bench-000027,,uber.com,,,,,,,,US,2025-01-01,domain_only
+bench-000028,,,ADBE,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000029,,,,,,,,US98980L1017,,US,2025-01-01,strong_identifier
+bench-000030,Gogole LLC,,,,,,,,,US,2025-01-01,single_typo
+bench-000031,,,,,0001108524,,,,,US,2025-01-01,cik_only
+bench-000032,,,,,,,BBG00YSTZ0X8,,,US,2025-01-01,figi_only
+bench-000033,,,SBUX,,,,,,,US,2025-01-01,ticker_only
+bench-000034,Starbucks Corporation,,,,0000829224,GNZUL8GTJZBUXVZ2K794,BBG0022P0T29,US8552441094,855244109,US,2025-01-01,conflicting_identifier
+bench-000035,Inc GitHub,,,,,,,,,US,2025-01-01,swapped_words
+bench-000036,"Uber Technologies, Inc. Cloud Division",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,added_division
+bench-000037,Alphabet Inc,,GOOGL,XNAS,0001652044,5493006MHB84DD0ZWV18,BBG009S39JX6,US02079K3059,02079K305,GB,2025-01-01,conflicting_country
+bench-000038,Microsoft Corporation,,MSFT,XNAS,0000789019,INR2EJN1ERAN0W5ZP974,BBG000BPH459,US5949181045,594918104,US,1900-01-01,historical_date
+bench-000039,Northstar Fictional Industries 38 LLC,northstar-fictional-38.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000040,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000041,,,ZZ040,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000042,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000043,Amazon River Tours 42,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000044,Harborview Family Office 43,harborview-private-43.example,,,,,,,,US,2025-01-01,private_company
+bench-000045,LinkedIn Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000046,SLACK  TECHNOLOGIES  LLC.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000047,VMware,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000048,Starbucks Coffee,,SBUX,XNAS,0000829224,GNZUL8GTJZBUXVZ2K794,BBG000CTQBF3,US8552441094,855244109,US,2025-01-01,alias
+bench-000049,,vmware.com,,,,,,,,US,2025-01-01,domain_only
+bench-000050,,,MSFT,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000051,,,,,,,,,594918104,US,2025-01-01,strong_identifier
+bench-000052,Salck Technologies LLC,,,,,,,,,US,2025-01-01,single_typo
+bench-000053,,,,,0001108524,,,,,US,2025-01-01,cik_only
+bench-000054,,,,,,,BBG000BPH459,,,US,2025-01-01,figi_only
+bench-000055,,,UBER,,,,,,,US,2025-01-01,ticker_only
+bench-000056,"Uber Technologies, Inc.",,,,0001543151,549300WW7ISGT7ITHE49,BBG009S39JX6,US90353T1007,90353T100,US,2025-01-01,conflicting_identifier
+bench-000057,Inc International Marriott,,MAR,XNAS,0001048286,549300TP1UZL5Y3LFV14,BBG000BGGRW1,US5719032022,571903202,US,2025-01-01,swapped_words
+bench-000058,Google LLC North America,,,,,,,,,US,2025-01-01,added_division
+bench-000059,LinkedIn Corporation,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000060,Starbucks Corporation,,SBUX,XNAS,0000829224,GNZUL8GTJZBUXVZ2K794,BBG000CTQBF3,US8552441094,855244109,US,1900-01-01,historical_date
+bench-000061,Northstar Fictional Industries 60 LLC,northstar-fictional-60.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000062,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000063,,,ZZ062,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000064,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000065,Amazon River Tours 64,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000066,Harborview Family Office 65,harborview-private-65.example,,,,,,,,US,2025-01-01,private_company
+bench-000067,LinkedIn Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000068,LINKEDIN  CORPORATION.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000069,Starbucks,,SBUX,XNAS,0000829224,GNZUL8GTJZBUXVZ2K794,BBG000CTQBF3,US8552441094,855244109,US,2025-01-01,legal_suffix_removed
+bench-000070,Twilio,,TWLO,XNYS,0001447669,5493003BR0GG6RIWHR58,BBG0022P0T29,US90138F1021,90138F102,US,2025-01-01,alias
+bench-000071,,marriott.com,,,,,,,,US,2025-01-01,domain_only
+bench-000072,,,DAL,XNYS,,,,,,US,2025-01-01,ticker_exchange
+bench-000073,,,,,,549300WV6GIDOZJTV909,,,,US,2025-01-01,strong_identifier
+bench-000074,"Uber Technologies, Icn.",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,single_typo
+bench-000075,,,,,0001048286,,,,,US,2025-01-01,cik_only
+bench-000076,,,,,,,BBG00YSTZ0X8,,,US,2025-01-01,figi_only
+bench-000077,,,MSFT,,,,,,,US,2025-01-01,ticker_only
+bench-000078,LinkedIn Corporation,,,,,,BBG00KHY5S69,,,US,2025-01-01,conflicting_identifier
+bench-000079,Inc SendGrid,,,,,,,,,US,2025-01-01,swapped_words
+bench-000080,VMware LLC North America,,,,,,,,,US,2025-01-01,added_division
+bench-000081,Apple Bank for Savings,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000082,SendGrid Inc,,,,,,,,,US,1900-01-01,historical_date
+bench-000083,Northstar Fictional Industries 82 LLC,northstar-fictional-82.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000084,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000085,,,ZZ084,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000086,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000087,Amazon River Tours 86,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000088,Harborview Family Office 87,harborview-private-87.example,,,,,,,,US,2025-01-01,private_company
+bench-000089,LinkedIn Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000090,MICROSOFT  CORPORATION.,,MSFT,XNAS,0000789019,INR2EJN1ERAN0W5ZP974,BBG000BPH459,US5949181045,594918104,US,2025-01-01,case_and_punctuation
+bench-000091,Uber Technologies,,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,legal_suffix_removed
+bench-000092,VMware,,,,,,,,,US,2025-01-01,alias
+bench-000093,,delta.com,,,,,,,,US,2025-01-01,domain_only
+bench-000094,,,CRM,XNYS,,,,,,US,2025-01-01,ticker_exchange
+bench-000095,,,,,0001447669,,,,,US,2025-01-01,strong_identifier
+bench-000096,VMawre LLC,,,,,,,,,US,2025-01-01,single_typo
+bench-000097,,,,,0000320193,,,,,US,2025-01-01,cik_only
+bench-000098,,,,,,,BBG000BVPV84,,,US,2025-01-01,figi_only
+bench-000099,,,GOOGL,,,,,,,US,2025-01-01,ticker_only
+bench-000100,SendGrid Inc,,,,,,BBG0022P0T29,,,US,2025-01-01,conflicting_identifier
+bench-000101,Inc Broadcom,,AVGO,XNAS,0001730168,549300WV6GIDOZJTV909,BBG00KHY5S69,US11135F1012,11135F101,US,2025-01-01,swapped_words
+bench-000102,Amazon.com Inc Cloud Division,,AMZN,XNAS,0001018724,ZXTILKJKG63JELOEG630,BBG000BVPV84,US0231351067,023135106,US,2025-01-01,added_division
+bench-000103,Amazon Web Services Inc,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000104,Apple Bank for Savings,,,,,,,,,US,1900-01-01,historical_date
+bench-000105,Northstar Fictional Industries 104 LLC,northstar-fictional-104.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000106,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000107,,,ZZ106,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000108,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000109,Amazon River Tours 108,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000110,Harborview Family Office 109,harborview-private-109.example,,,,,,,,US,2025-01-01,private_company
+bench-000111,Microsoft Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000112,LINKEDIN  CORPORATION.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000113,Atlassian,,TEAM,XNAS,0001650372,549300RQFN1DZBW2GN27,BBG00YSTZ0X8,US0494681010,049468101,US,2025-01-01,legal_suffix_removed
+bench-000114,VMware Cloud,,,,,,,,,US,2025-01-01,alias
+bench-000115,,zoom.us,,,,,,,,US,2025-01-01,domain_only
+bench-000116,,,AAPL,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000117,,,,,0001447669,,,,,US,2025-01-01,strong_identifier
+bench-000118,LinkedIn Corproation,,,,,,,,,US,2025-01-01,single_typo
+bench-000119,,,,,0001048286,,,,,US,2025-01-01,cik_only
+bench-000120,,,,,,,BBG000CTQBF3,,,US,2025-01-01,figi_only
+bench-000121,,,ADBE,,,,,,,US,2025-01-01,ticker_only
+bench-000122,"Salesforce, Inc.",,,,0001108524,C31Y1RQFAOY6DVJ3JG23,BBG000BB5006,US79466L3024,79466L302,US,2025-01-01,conflicting_identifier
+bench-000123,"Inc. Salesforce,",,CRM,XNYS,0001108524,C31Y1RQFAOY6DVJ3JG23,BBG000BN2DC2,US79466L3024,79466L302,US,2025-01-01,swapped_words
+bench-000124,Northwind Catering LLC Cloud Division,,,,,,,,,US,2025-01-01,added_division
+bench-000125,SendGrid Inc,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000126,Slack Technologies LLC,,,,,,,,,US,1900-01-01,historical_date
+bench-000127,Northstar Fictional Industries 126 LLC,northstar-fictional-126.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000128,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000129,,,ZZ128,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000130,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000131,Amazon River Tours 130,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000132,Harborview Family Office 131,harborview-private-131.example,,,,,,,,US,2025-01-01,private_company
+bench-000133,LinkedIn Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000134,AMAZON.COM  INC.,,AMZN,XNAS,0001018724,ZXTILKJKG63JELOEG630,BBG000BVPV84,US0231351067,023135106,US,2025-01-01,case_and_punctuation
+bench-000135,Broadcom,,AVGO,XNAS,0001730168,549300WV6GIDOZJTV909,BBG00KHY5S69,US11135F1012,11135F101,US,2025-01-01,legal_suffix_removed
+bench-000136,Zoom,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,2025-01-01,alias
+bench-000137,,amazon.com,,,,,,,,US,2025-01-01,domain_only
+bench-000138,,,ADBE,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000139,,,,,,,,US90138F1021,,US,2025-01-01,strong_identifier
+bench-000140,Atlassian Corproation,,TEAM,XNAS,0001650372,549300RQFN1DZBW2GN27,BBG00YSTZ0X8,US0494681010,049468101,US,2025-01-01,single_typo
+bench-000141,,,,,0001447669,,,,,US,2025-01-01,cik_only
+bench-000142,,,,,,,BBG009S39JX6,,,US,2025-01-01,figi_only
+bench-000143,,,UBER,,,,,,,US,2025-01-01,ticker_only
+bench-000144,Microsoft Corporation,,,,0000789019,INR2EJN1ERAN0W5ZP974,BBG000CTQBF3,US5949181045,594918104,US,2025-01-01,conflicting_identifier
+bench-000145,Inc Adobe,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,2025-01-01,swapped_words
+bench-000146,Starbucks Corporation Payments Unit,,SBUX,XNAS,0000829224,GNZUL8GTJZBUXVZ2K794,BBG000CTQBF3,US8552441094,855244109,US,2025-01-01,added_division
+bench-000147,Adobe Inc,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,GB,2025-01-01,conflicting_country
+bench-000148,"Salesforce, Inc.",,CRM,XNYS,0001108524,C31Y1RQFAOY6DVJ3JG23,BBG000BN2DC2,US79466L3024,79466L302,US,1900-01-01,historical_date
+bench-000149,Northstar Fictional Industries 148 LLC,northstar-fictional-148.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000150,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000151,,,ZZ150,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000152,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000153,Amazon River Tours 152,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000154,Harborview Family Office 153,harborview-private-153.example,,,,,,,,US,2025-01-01,private_company
+bench-000155,Northwind Catering LLC,,,,,,,,,US,2025-01-01,exact_name
+bench-000156,DELTA  AIR  LINES  INC.,,DAL,XNYS,0000027904,5493000K34QG9UBPT324,BBG000R7Z112,US2473617023,247361702,US,2025-01-01,case_and_punctuation
+bench-000157,Adobe,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,2025-01-01,legal_suffix_removed
+bench-000158,Amazon.com,,AMZN,XNAS,0001018724,ZXTILKJKG63JELOEG630,BBG000BVPV84,US0231351067,023135106,US,2025-01-01,alias
+bench-000159,,google.com,,,,,,,,US,2025-01-01,domain_only
+bench-000160,,,GOOGL,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000161,,,,,0001650372,,,,,US,2025-01-01,strong_identifier
+bench-000162,Wohle Foods Market Inc,,,,,,,,,US,2025-01-01,single_typo
+bench-000163,,,,,0001018724,,,,,US,2025-01-01,cik_only
+bench-000164,,,,,,,BBG000R7Z112,,,US,2025-01-01,figi_only
+bench-000165,,,ZM,,,,,,,US,2025-01-01,ticker_only
+bench-000166,Microsoft Corporation,,,,0000789019,INR2EJN1ERAN0W5ZP974,BBG00YSTZ0X8,US5949181045,594918104,US,2025-01-01,conflicting_identifier
+bench-000167,Inc Broadcom,,AVGO,XNAS,0001730168,549300WV6GIDOZJTV909,BBG00KHY5S69,US11135F1012,11135F101,US,2025-01-01,swapped_words
+bench-000168,Adobe Inc Cloud Division,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,2025-01-01,added_division
+bench-000169,"Uber Technologies, Inc.",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,GB,2025-01-01,conflicting_country
+bench-000170,Alphabet Inc,,GOOGL,XNAS,0001652044,5493006MHB84DD0ZWV18,BBG009S39JX6,US02079K3059,02079K305,US,1900-01-01,historical_date
+bench-000171,Northstar Fictional Industries 170 LLC,northstar-fictional-170.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000172,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000173,,,ZZ172,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000174,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000175,Amazon River Tours 174,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000176,Harborview Family Office 175,harborview-private-175.example,,,,,,,,US,2025-01-01,private_company
+bench-000177,GitHub Inc,,,,,,,,,US,2025-01-01,exact_name
+bench-000178,MICROSOFT  CORPORATION.,,MSFT,XNAS,0000789019,INR2EJN1ERAN0W5ZP974,BBG000BPH459,US5949181045,594918104,US,2025-01-01,case_and_punctuation
+bench-000179,Marriott International,,MAR,XNAS,0001048286,549300TP1UZL5Y3LFV14,BBG000BGGRW1,US5719032022,571903202,US,2025-01-01,legal_suffix_removed
+bench-000180,Uber,,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,US,2025-01-01,alias
+bench-000181,,zoom.us,,,,,,,,US,2025-01-01,domain_only
+bench-000182,,,ADBE,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000183,,,,,,,,US0231351067,,US,2025-01-01,strong_identifier
+bench-000184,Zoom Communications Inc,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,2025-01-01,single_typo
+bench-000185,,,,,0001585521,,,,,US,2025-01-01,cik_only
+bench-000186,,,,,,,BBG000R7Z112,,,US,2025-01-01,figi_only
+bench-000187,,,AMZN,,,,,,,US,2025-01-01,ticker_only
+bench-000188,Slack Technologies LLC,,,,,,BBG00YSTZ0X8,,,US,2025-01-01,conflicting_identifier
+bench-000189,Inc Adobe,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,2025-01-01,swapped_words
+bench-000190,Atlassian Corporation Cloud Division,,TEAM,XNAS,0001650372,549300RQFN1DZBW2GN27,BBG00YSTZ0X8,US0494681010,049468101,US,2025-01-01,added_division
+bench-000191,Northwind Catering LLC,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000192,LinkedIn Corporation,,,,,,,,,US,1900-01-01,historical_date
+bench-000193,Northstar Fictional Industries 192 LLC,northstar-fictional-192.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000194,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000195,,,ZZ194,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000196,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000197,Amazon River Tours 196,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000198,Harborview Family Office 197,harborview-private-197.example,,,,,,,,US,2025-01-01,private_company
+bench-000199,Adobe Inc,,,,,,,,,US,2025-01-01,exact_name
+bench-000200,NORTHWIND  CATERING  LLC.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000201,GitHub,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000202,Delta Air Lines,,DAL,XNYS,0000027904,5493000K34QG9UBPT324,BBG000R7Z112,US2473617023,247361702,US,2025-01-01,alias
+bench-000203,,marriott.com,,,,,,,,US,2025-01-01,domain_only
+bench-000204,,,MAR,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000205,,,,,0001048286,,,,,US,2025-01-01,strong_identifier
+bench-000206,LinkedIn Corproation,,,,,,,,,US,2025-01-01,single_typo
+bench-000207,,,,,0001585521,,,,,US,2025-01-01,cik_only
+bench-000208,,,,,,,BBG000BB5006,,,US,2025-01-01,figi_only
+bench-000209,,,MAR,,,,,,,US,2025-01-01,ticker_only
+bench-000210,"Uber Technologies, Inc.",,,,0001543151,549300WW7ISGT7ITHE49,BBG000BB5006,US90353T1007,90353T100,US,2025-01-01,conflicting_identifier
+bench-000211,Inc Communications Zoom,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,2025-01-01,swapped_words
+bench-000212,LinkedIn Corporation North America,,,,,,,,,US,2025-01-01,added_division
+bench-000213,Zoom Communications Inc,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,GB,2025-01-01,conflicting_country
+bench-000214,Whole Foods Market Inc,,,,,,,,,US,1900-01-01,historical_date
+bench-000215,Northstar Fictional Industries 214 LLC,northstar-fictional-214.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000216,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000217,,,ZZ216,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000218,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000219,Amazon River Tours 218,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000220,Harborview Family Office 219,harborview-private-219.example,,,,,,,,US,2025-01-01,private_company
+bench-000221,Adobe Inc,,,,,,,,,US,2025-01-01,exact_name
+bench-000222,NORTHWIND  CATERING  LLC.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000223,SendGrid,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000224,SendGrid,,,,,,,,,US,2025-01-01,alias
+bench-000225,,uber.com,,,,,,,,US,2025-01-01,domain_only
+bench-000226,,,MSFT,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000227,,,,,,ZXTILKJKG63JELOEG630,,,,US,2025-01-01,strong_identifier
+bench-000228,Twliio Inc,,TWLO,XNYS,0001447669,5493003BR0GG6RIWHR58,BBG0022P0T29,US90138F1021,90138F102,US,2025-01-01,single_typo
+bench-000229,,,,,0000320193,,,,,US,2025-01-01,cik_only
+bench-000230,,,,,,,BBG009S39JX6,,,US,2025-01-01,figi_only
+bench-000231,,,ADBE,,,,,,,US,2025-01-01,ticker_only
+bench-000232,Northwind Catering LLC,,,,,,BBG000BVPV84,,,US,2025-01-01,conflicting_identifier
+bench-000233,Inc Adobe,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,2025-01-01,swapped_words
+bench-000234,Apple Inc Cloud Division,,AAPL,XNAS,0000320193,HWUPKR0MPOU8FGXBT394,BBG000B9XRY4,US0378331005,037833100,US,2025-01-01,added_division
+bench-000235,"Uber Technologies, Inc.",,UBER,XNYS,0001543151,549300WW7ISGT7ITHE49,BBG002B04MT8,US90353T1007,90353T100,GB,2025-01-01,conflicting_country
+bench-000236,Adobe Inc,,ADBE,XNAS,0000796343,549300P8Z9J4ZUZ9M694,BBG000BB5006,US00724F1012,00724F101,US,1900-01-01,historical_date
+bench-000237,Northstar Fictional Industries 236 LLC,northstar-fictional-236.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000238,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000239,,,ZZ238,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000240,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000241,Amazon River Tours 240,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000242,Harborview Family Office 241,harborview-private-241.example,,,,,,,,US,2025-01-01,private_company
+bench-000243,Amazon Web Services Inc,,,,,,,,,US,2025-01-01,exact_name
+bench-000244,AMAZON  WEB  SERVICES  INC.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000245,Whole Foods Market,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000246,Google Workspace,,,,,,,,,US,2025-01-01,alias
+bench-000247,,starbucks.com,,,,,,,,US,2025-01-01,domain_only
+bench-000248,,,SBUX,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000249,,,,,0000829224,,,,,US,2025-01-01,strong_identifier
+bench-000250,Starbucks Corproation,,SBUX,XNAS,0000829224,GNZUL8GTJZBUXVZ2K794,BBG000CTQBF3,US8552441094,855244109,US,2025-01-01,single_typo
+bench-000251,,,,,0001650372,,,,,US,2025-01-01,cik_only
+bench-000252,,,,,,,BBG009S39JX6,,,US,2025-01-01,figi_only
+bench-000253,,,MSFT,,,,,,,US,2025-01-01,ticker_only
+bench-000254,VMware LLC,,,,,,BBG000BPH459,,,US,2025-01-01,conflicting_identifier
+bench-000255,Corporation Microsoft,,MSFT,XNAS,0000789019,INR2EJN1ERAN0W5ZP974,BBG000BPH459,US5949181045,594918104,US,2025-01-01,swapped_words
+bench-000256,Marriott International Inc Cloud Division,,MAR,XNAS,0001048286,549300TP1UZL5Y3LFV14,BBG000BGGRW1,US5719032022,571903202,US,2025-01-01,added_division
+bench-000257,Northwind Catering LLC,,,,,,,,,GB,2025-01-01,conflicting_country
+bench-000258,Zoom Communications Inc,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,1900-01-01,historical_date
+bench-000259,Northstar Fictional Industries 258 LLC,northstar-fictional-258.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000260,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000261,,,ZZ260,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000262,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000263,Amazon River Tours 262,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000264,Harborview Family Office 263,harborview-private-263.example,,,,,,,,US,2025-01-01,private_company
+bench-000265,Microsoft Corporation,,,,,,,,,US,2025-01-01,exact_name
+bench-000266,APPLE  BANK  FOR  SAVINGS.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000267,LinkedIn,,,,,,,,,US,2025-01-01,legal_suffix_removed
+bench-000268,Google,,,,,,,,,US,2025-01-01,alias
+bench-000269,,wholefoodsmarket.com,,,,,,,,US,2025-01-01,domain_only
+bench-000270,,,GOOGL,XNAS,,,,,,US,2025-01-01,ticker_exchange
+bench-000271,,,,,0001585521,,,,,US,2025-01-01,strong_identifier
+bench-000272,GiHtub Inc,,,,,,,,,US,2025-01-01,single_typo
+bench-000273,,,,,0001108524,,,,,US,2025-01-01,cik_only
+bench-000274,,,,,,,BBG000BB5006,,,US,2025-01-01,figi_only
+bench-000275,,,MSFT,,,,,,,US,2025-01-01,ticker_only
+bench-000276,Adobe Inc,,,,0000796343,549300P8Z9J4ZUZ9M694,BBG000BGGRW1,US00724F1012,00724F101,US,2025-01-01,conflicting_identifier
+bench-000277,Inc International Marriott,,MAR,XNAS,0001048286,549300TP1UZL5Y3LFV14,BBG000BGGRW1,US5719032022,571903202,US,2025-01-01,swapped_words
+bench-000278,Amazon Web Services Inc Cloud Division,,,,,,,,,US,2025-01-01,added_division
+bench-000279,Microsoft Corporation,,MSFT,XNAS,0000789019,INR2EJN1ERAN0W5ZP974,BBG000BPH459,US5949181045,594918104,GB,2025-01-01,conflicting_country
+bench-000280,Whole Foods Market Inc,,,,,,,,,US,1900-01-01,historical_date
+bench-000281,Northstar Fictional Industries 280 LLC,northstar-fictional-280.example,,,,,,,,US,2025-01-01,fictional_company
+bench-000282,Holdings,,,,,,,,,US,2025-01-01,insufficient_information
+bench-000283,,,ZZ282,NASDAQ,,,,,,US,2025-01-01,invalid_ticker
+bench-000284,National Bank,,,,,,,,,US,2025-01-01,generic_name
+bench-000285,Amazon River Tours 284,,,,,,,,,US,2025-01-01,lookalike_name
+bench-000286,Harborview Family Office 285,harborview-private-285.example,,,,,,,,US,2025-01-01,private_company
+bench-000287,Broadcom Inc,,,,,,,,,US,2025-01-01,exact_name
+bench-000288,LINKEDIN  CORPORATION.,,,,,,,,,US,2025-01-01,case_and_punctuation
+bench-000289,Salesforce,,CRM,XNYS,0001108524,C31Y1RQFAOY6DVJ3JG23,BBG000BN2DC2,US79466L3024,79466L302,US,2025-01-01,legal_suffix_removed
+bench-000290,Apple Computer,,AAPL,XNAS,0000320193,HWUPKR0MPOU8FGXBT394,BBG000B9XRY4,US0378331005,037833100,US,2025-01-01,alias
+bench-000291,,atlassian.com,,,,,,,,US,2025-01-01,domain_only
+bench-000292,,,UBER,XNYS,,,,,,US,2025-01-01,ticker_exchange
+bench-000293,,,,,,549300CGT8MTHKHBQL39,,,,US,2025-01-01,strong_identifier
+bench-000294,Twliio Inc,,TWLO,XNYS,0001447669,5493003BR0GG6RIWHR58,BBG0022P0T29,US90138F1021,90138F102,US,2025-01-01,single_typo
+bench-000295,,,,,0000027904,,,,,US,2025-01-01,cik_only
+bench-000296,,,,,,,BBG000B9XRY4,,,US,2025-01-01,figi_only
+bench-000297,,,AMZN,,,,,,,US,2025-01-01,ticker_only
+bench-000298,"Uber Technologies, Inc.",,,,0001543151,549300WW7ISGT7ITHE49,BBG000R7Z112,US90353T1007,90353T100,US,2025-01-01,conflicting_identifier
+bench-000299,Inc Apple,,AAPL,XNAS,0000320193,HWUPKR0MPOU8FGXBT394,BBG000B9XRY4,US0378331005,037833100,US,2025-01-01,swapped_words
+bench-000300,Zoom Communications Inc Cloud Division,,ZM,XNAS,0001585521,549300CGT8MTHKHBQL39,BBG0042V6JM8,US98980L1017,98980L101,US,2025-01-01,added_division

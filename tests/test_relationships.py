@@ -16,7 +16,7 @@ class CustomerRelationshipTests(unittest.TestCase):
         content = """internal_entity_id,canonical_name,entity_type,domain,lei,parent_entity_id,parent_name,parent_entity_type,relationship_type,relationship_valid_from,relationship_valid_to
 brand:acme,Acme Product,brand,acme.test,LEIBRAND000000000001,entity:sub,Acme Operations,subsidiary,brand_of,2020-01-01,
 entity:sub,Acme Operations,subsidiary,,LEISUB00000000000002,entity:issuer,Acme Holdings,issuer,subsidiary_of,2018-01-01,
-entity:issuer,Acme Holdings,issuer,,LEIISSUER00000000003,,,,,
+entity:issuer,Acme Holdings,issuer,,LEIISSUER00000000003,,,,,,
 """
         with tempfile.TemporaryDirectory() as directory:
             master = Path(directory) / "master.csv"
@@ -26,17 +26,23 @@ entity:issuer,Acme Holdings,issuer,,LEIISSUER00000000003,,,,,
             result = engine.match(EntityMatchInput("r1", brandName="Acme Product", domain="acme.test", observationDate="2024-06-30"))
             historical = engine.match(EntityMatchInput("r1-old", brandName="Acme Product", domain="acme.test", observationDate="2019-06-30"))
 
-        self.assertEqual(result.status, "matched")
+        self.assertEqual(result.status, "review_required")
+        self.assertEqual(result.primaryPathway, "brand_inference")
         self.assertEqual(result.relationshipStatus, "resolved")
         self.assertEqual([item["entityId"] for item in result.relationshipGraph["chain"]], ["brand:acme", "entity:sub", "entity:issuer"])
         self.assertEqual(result.relationshipGraph["directParent"]["entityId"], "entity:sub")
         self.assertEqual(result.relationshipGraph["ultimateParent"]["entityId"], "entity:issuer")
         self.assertEqual(result.relationshipGraph["issuer"]["entityId"], "entity:issuer")
         self.assertEqual(result.publicParent["entityId"], "entity:issuer")
+        self.assertEqual(result.parentStatus, "candidate")
+        self.assertEqual(result.parentAlternatives[0]["chain"], ["brand:acme", "entity:sub", "entity:issuer"])
+        self.assertEqual(result.parentAlternatives[0]["trustLevel"], "supporting")
+        self.assertTrue(result.parentAlternatives[0]["brandInference"])
+        self.assertTrue(any(item.type == "parent_candidate" for item in result.parentEvidence))
         self.assertEqual(result.relationshipGraph["pointInTimeStatus"], "verified")
         self.assertTrue(result.relationshipGraph["validOnObservationDate"])
         self.assertTrue(result.relationshipGraph["complete"])
-        self.assertTrue(any(item.type == "relationship_resolution" for item in result.evidence))
+        self.assertTrue(any(item.type == "relationship_resolution" for item in result.parentEvidence))
         self.assertEqual(historical.relationshipGraph["pointInTimeStatus"], "invalid")
         self.assertFalse(historical.relationshipGraph["validOnObservationDate"])
         self.assertIsNone(historical.relationshipGraph["directParent"])
@@ -60,6 +66,9 @@ entity:issuer,Acme Holdings,issuer,,LEIISSUER00000000003,,,,,
         }])
         result = MatchEngine([], rules=rules).match(EntityMatchInput("r2", brandName="Widget", observationDate="2023-01-01"))
         self.assertEqual(result.status, "matched")
+        self.assertEqual(result.parentStatus, "verified")
+        self.assertEqual(result.parentAlternatives[0]["sources"], ["rule:brand-parent"])
+        self.assertTrue(any(item.type == "parent_verified" for item in result.parentEvidence))
         self.assertEqual(result.relationshipGraph["issuer"]["entityId"], "entity:widget-issuer")
         self.assertEqual(result.relationshipGraph["pointInTimeStatus"], "verified")
         self.assertTrue(result.relationshipGraph["complete"])
@@ -123,6 +132,54 @@ class GLEIFRelationshipTests(unittest.TestCase):
         self.assertEqual(graph["reportingExceptions"][0]["reason"], "NO_KNOWN_PERSON")
         self.assertIn(f"/lei-records/{parent}/direct-parent-relationship", provider.requested)
         self.assertTrue(all(edge["provenance"] for edge in graph["edges"]))
+        self.assertTrue(all(edge["source"] == "gleif" for edge in graph["edges"]))
+        self.assertTrue(all(edge["trustLevel"] == "supporting" for edge in graph["edges"]))
+        self.assertTrue(all(edge["selfReported"] for edge in graph["edges"]))
+
+
+class ParentConflictTests(unittest.TestCase):
+    def test_conflicting_authoritative_parents_force_review_without_erasing_entity(self):
+        candidate = ProviderCandidate(
+            "entity:child", "Child Company", "subsidiary", "sec", domain="child.test",
+            relationships=[
+                {
+                    "fromEntityId": "entity:child", "toEntityId": "entity:parent-a",
+                    "toEntity": {"entityId": "entity:parent-a", "canonicalName": "Parent A", "entityType": "issuer"},
+                    "relationshipType": "subsidiary_of", "provider": "rule:approved-parent",
+                },
+                {
+                    "fromEntityId": "entity:child", "toEntityId": "entity:parent-b",
+                    "toEntity": {"entityId": "entity:parent-b", "canonicalName": "Parent B", "entityType": "issuer"},
+                    "relationshipType": "subsidiary_of", "provider": "override:reviewer",
+                },
+            ],
+        )
+
+        class StaticProvider:
+            name = "sec"
+
+            def search(self, input_record, limit=20):
+                return [candidate]
+
+            def search_batch(self, records, limit=20):
+                return {record.recordId: [candidate] for record in records}
+
+            def search_bundle_batch(self, records, limit=20):
+                from symbologylink.providers import ProviderSearchResult
+                return {record.recordId: ProviderSearchResult(entities=[candidate]) for record in records}
+
+            def resolve_relationships(self, candidate, observation_date=None, max_depth=8):
+                return None
+
+        result = MatchEngine([StaticProvider()]).match(EntityMatchInput("conflict", entityName="Child Company", domain="child.test"))
+
+        self.assertEqual(result.status, "review_required")
+        self.assertEqual(result.matchedEntity["entityId"], "entity:child")
+        self.assertEqual(result.parentStatus, "contradicted")
+        self.assertEqual([item["entityId"] for item in result.parentAlternatives], ["entity:parent-b", "entity:parent-a"])
+        self.assertEqual(result.publicParent["entityId"], "entity:parent-b")
+        self.assertTrue(result.relationshipGraph["parentResolution"]["authoritativeConflict"])
+        self.assertTrue(any(item.type == "authoritative_parent_conflict" for item in result.parentEvidence))
 
 
 if __name__ == "__main__":
