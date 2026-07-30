@@ -1,0 +1,14 @@
+{
+  "dateFormat": "%d/%m/%Y",
+  "mapping": {
+    "txn_id": "recordId",
+    "merchant_descriptor": "entityName",
+    "merchant_url": "domain",
+    "ticker_hint": "ticker",
+    "exchange_hint": "exchange",
+    "isin_hint": "isin",
+    "posted_date": "observationDate",
+    "country_code": "country",
+    "amount_usd": "metadata"
+  }
+}

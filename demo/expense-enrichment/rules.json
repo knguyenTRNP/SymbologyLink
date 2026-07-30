@@ -1,0 +1,92 @@
+{
+  "rules": [
+    {
+      "id": "sbux_card_descriptors",
+      "version": "1",
+      "priority": 200,
+      "enabled": true,
+      "description": "Known Starbucks card-acquirer descriptors. Store-number suffixes defeat name similarity, so the approved descriptor list is pinned deterministically.",
+      "conditions": {
+        "entity_name": {
+          "normalized_exact_any": [
+            "SBUX STORE 04417 SEATTLE",
+            "SBUX STORE 01188 BELLEVUE",
+            "STARBUCKS STORE 04417"
+          ]
+        }
+      },
+      "result": {
+        "entity": {
+          "entity_id": "entity:starbucks",
+          "canonical_name": "Starbucks Corporation",
+          "entity_type": "issuer"
+        },
+        "security": {
+          "internal_security_id": "security:sbux",
+          "ticker": "SBUX",
+          "exchange": "NASDAQ"
+        },
+        "entity_periods": [
+          { "periodType": "entity_existence", "validFrom": "1971-03-30" }
+        ],
+        "security_periods": [
+          {
+            "periodType": "security_listing",
+            "validFrom": "1992-06-26",
+            "securityId": "security:sbux"
+          }
+        ]
+      }
+    },
+    {
+      "id": "adobe_ticker_hint_is_wrong",
+      "version": "1",
+      "priority": 150,
+      "enabled": true,
+      "description": "The card feed populates a stale ticker_hint of MSFT on Adobe enterprise invoices. Domain plus legal name is authoritative; the ticker hint is discarded.",
+      "conditions": {
+        "entity_name": { "normalized_exact": "Adobe Inc" },
+        "domain": { "domain": "adobe.com" }
+      },
+      "result": {
+        "entity": {
+          "entity_id": "entity:adobe",
+          "canonical_name": "Adobe Inc",
+          "entity_type": "issuer"
+        },
+        "security": {
+          "internal_security_id": "security:adbe",
+          "ticker": "ADBE",
+          "exchange": "NASDAQ"
+        },
+        "entity_periods": [
+          { "periodType": "entity_existence", "validFrom": "1983-12-01" }
+        ],
+        "security_periods": [
+          {
+            "periodType": "security_listing",
+            "validFrom": "1986-08-13",
+            "securityId": "security:adbe"
+          }
+        ]
+      }
+    },
+    {
+      "id": "municipal_charges_are_not_vendors",
+      "version": "1",
+      "priority": 120,
+      "enabled": true,
+      "description": "Municipal parking and permit charges have no corporate counterparty and must not consume analyst review time.",
+      "conditions": {
+        "entity_name": {
+          "normalized_exact_any": [
+            "CITY OF SEATTLE PARKING METER",
+            "CITY OF SEATTLE PERMIT"
+          ]
+        }
+      },
+      "action": "unmatched",
+      "result": {}
+    }
+  ]
+}

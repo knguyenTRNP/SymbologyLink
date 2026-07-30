@@ -1,0 +1,2 @@
+relationship_id,child_entity_id,parent_entity_id,relationship_type,valid_from,valid_to,ownership_percentage,source,source_record_id,trust_level,is_direct
+relationship:wholefoods-amazon,entity:wholefoods,entity:amazon,subsidiary_of,2017-08-28,,100,customer_master,acquisition-2017,authoritative,true

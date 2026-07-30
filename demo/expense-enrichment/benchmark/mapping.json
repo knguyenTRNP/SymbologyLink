@@ -1,0 +1,17 @@
+{
+  "mapping": {
+    "record_id": "recordId",
+    "entity_name": "entityName",
+    "domain": "domain",
+    "ticker": "ticker",
+    "exchange": "exchange",
+    "cik": "cik",
+    "lei": "lei",
+    "figi": "figi",
+    "isin": "isin",
+    "cusip": "cusip",
+    "country": "country",
+    "observation_date": "observationDate",
+    "benchmark_category": "metadata"
+  }
+}

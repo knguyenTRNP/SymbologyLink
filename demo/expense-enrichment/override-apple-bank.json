@@ -1,0 +1,21 @@
+{
+  "pattern": {
+    "entity_name": {
+      "normalized_exact": "APPLE BANK FOR SAVINGS"
+    }
+  },
+  "action": "match",
+  "reviewer": "k.nguyen",
+  "reason": "Reviewed 2025-07-20. Wire fee is from Apple Bank for Savings, a New York mutual savings bank. It is unrelated to Apple Inc and has no listed security.",
+  "mapping_version": "v1",
+  "result": {
+    "entity": {
+      "entity_id": "entity:apple-bank",
+      "canonical_name": "Apple Bank for Savings",
+      "entity_type": "legal_entity"
+    },
+    "entity_periods": [
+      { "periodType": "entity_existence", "validFrom": "1863-01-01" }
+    ]
+  }
+}
