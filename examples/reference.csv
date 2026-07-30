@@ -3,3 +3,4 @@ entity:microsoft,security:msft,Microsoft Corporation,issuer,MSFT,NASDAQ,BBG000BP
 entity:github,,GitHub Inc,subsidiary,,,,,,github.com,US,GitHub|Git Hub,entity:microsoft,Microsoft Corporation,subsidiary_of,2018-10-26,,2008-02-08,,ACTIVE,,,,2018-10-26,,ACTIVE
 entity:apple-bank,,Apple Bank for Savings,legal_entity,,,,,,applebank.com,US,Apple Bank,,,,1863-01-01,,1863-01-01,,ACTIVE,,,,,,
 entity:amazon,security:amzn,Amazon.com Inc,issuer,AMZN,NASDAQ,BBG000BVPV84,0001018724,AMZNLEI0000000000000,amazon.com,US,Amazon|Amazon.com,,,,1997-05-15,,1994-07-05,,ACTIVE,1997-05-15,,ACTIVE,,,
+entity:wholefoods,,Whole Foods Market Inc,subsidiary,,,,,,wholefoodsmarket.com,US,Whole Foods|Whole Foods Market,,,,1980-09-20,,1980-09-20,,ACTIVE,,,,,,

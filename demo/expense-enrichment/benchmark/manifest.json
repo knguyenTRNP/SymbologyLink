@@ -1,0 +1,32 @@
+{
+  "category_counts": {
+    "added_division": 14,
+    "alias": 14,
+    "case_and_punctuation": 14,
+    "cik_only": 14,
+    "conflicting_country": 13,
+    "conflicting_identifier": 14,
+    "domain_only": 14,
+    "exact_name": 14,
+    "fictional_company": 13,
+    "figi_only": 14,
+    "generic_name": 13,
+    "historical_date": 13,
+    "insufficient_information": 13,
+    "invalid_ticker": 13,
+    "legal_suffix_removed": 14,
+    "lookalike_name": 13,
+    "private_company": 13,
+    "single_typo": 14,
+    "strong_identifier": 14,
+    "swapped_words": 14,
+    "ticker_exchange": 14,
+    "ticker_only": 14
+  },
+  "generator_version": "1.0",
+  "negative_records": 78,
+  "positive_records": 222,
+  "record_count": 300,
+  "reference_sha256": "b5fd68e293446d0636268e6672df0a2ded4a5e1c1aba8abefdac7f3839c7d7cf",
+  "seed": 20260716
+}
